@@ -1,0 +1,7 @@
+# 测试与临时产物
+.kds-test-profile/
+*.log
+*.tmp
+Thumbs.db
+.DS_Store
+node_modules/
