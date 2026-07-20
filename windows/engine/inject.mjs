@@ -56,6 +56,11 @@ try {
   process.exit(1);
 }
 
+// 追加 Chat 页面（kimi.com 网页视图）的共享皮肤，复用主题里的 --kds-* 变量
+try {
+  css += '\n\n' + await readFile(path.join(__dirname, '..', 'themes', 'chat.css'), 'utf8');
+} catch { /* chat.css 缺失时跳过，不影响 Work 界面 */ }
+
 // 把 CSS 里的本地图片引用 url("assets/xxx.jpg") 内联为 data URI，
 // 这样注入是纯内存操作，页面上不需要额外的本地服务器或文件访问权限
 css = await inlineAssets(css, path.dirname(cssPath));
@@ -134,13 +139,18 @@ async function run() {
   let pages;
   if (args['all-pages']) {
     pages = targets.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl);
-  } else {
+  } else if (args.url) {
     pages = [pickMainPage(targets, { urlPattern: args.url })];
+  } else {
+    // 默认覆盖 Work 主界面 + Chat 网页视图（kimi.com），排除火山引擎内部页面
+    pages = targets.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl
+      && (t.url.includes('kimi-agent.html') || t.url.includes('kimi.com')));
+    if (!pages.length) pages = [pickMainPage(targets)];
   }
   for (const p of pages) await injectIntoPage(p);
 
   if (args.watch) {
-    // 驻留模式：轮询 target 列表，对尚未带标记的页面补注入（覆盖新窗口/新标签）
+    // 驻留模式：轮询 target 列表，对尚未带标记的页面补注入（覆盖新窗口/新标签，如 Chat 视图按需创建）
     console.log('[kds] 驻留模式已开启（每 2 秒巡检一次，Ctrl+C 退出）');
     for (;;) {
       await sleep(2000);
@@ -149,7 +159,10 @@ async function run() {
       catch { console.log('[kds] 调试端口已断开，退出驻留。'); break; }
       const candidates = args['all-pages']
         ? list.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl)
-        : [pickMainPage(list, { urlPattern: args.url })];
+        : args.url
+          ? [pickMainPage(list, { urlPattern: args.url })]
+          : list.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl
+              && (t.url.includes('kimi-agent.html') || t.url.includes('kimi.com')));
       for (const t of candidates) {
         const session = await CDPSession.connect(t.webSocketDebuggerUrl).catch(() => null);
         if (!session) continue;

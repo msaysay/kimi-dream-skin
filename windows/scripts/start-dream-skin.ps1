@@ -1,4 +1,4 @@
-﻿# ============================================================================
+# ============================================================================
 # start-dream-skin.ps1 —— 以调试端口启动 Kimi 并注入皮肤
 #
 # 安全边界：
@@ -56,6 +56,15 @@ if ($Watch) {
 } else {
     & node (Join-Path $engine 'inject.mjs') --port $port --theme $Theme
     if ($LASTEXITCODE -ne 0) { Write-Host '注入失败，可稍后重跑 verify-dream-skin.ps1 诊断。' -ForegroundColor Red; exit 1 }
+
+    # 后台驻留（隐藏窗口）：Chat 网页视图等按需创建的页面会自动补注入
+    $injectPath = Join-Path $engine 'inject.mjs'
+    $watchProc = Start-Process -FilePath 'node' `
+        -ArgumentList "`"$injectPath`" --port $port --theme $Theme --watch" `
+        -WindowStyle Hidden -PassThru
+    $state.watchPid = $watchProc.Id
+    Write-KdsState $state
+
     Write-Host ''
-    Write-Host "皮肤 [$Theme] 已生效。验证：.\verify-dream-skin.ps1  恢复：.\restore-dream-skin.ps1" -ForegroundColor Green
+    Write-Host "皮肤 [$Theme] 已生效（含 Chat 页面自动覆盖）。验证：.\verify-dream-skin.ps1  恢复：.\restore-dream-skin.ps1" -ForegroundColor Green
 }

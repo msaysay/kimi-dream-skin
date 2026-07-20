@@ -1,4 +1,4 @@
-﻿# ============================================================================
+# ============================================================================
 # restore-dream-skin.ps1 —— 恢复原生外观
 #
 # 皮肤只存在于运行进程的内存中，因此"恢复"= 移除当前注入 + 提示重启。
@@ -14,10 +14,19 @@ $ErrorActionPreference = 'Stop'
 
 $state = Read-KdsState
 
-# 1) 如果调试端口还活着，先在线移除 <style>/<meta>，立即恢复原生外观
+# 0) 先停掉后台驻留的补注入进程（如果存在），避免移除后又被补回来
+if ($state -and $state.watchPid) {
+    $w = Get-Process -Id $state.watchPid -ErrorAction SilentlyContinue
+    if ($w -and $w.ProcessName -match 'node') {
+        Write-Host "停止后台驻留进程 (PID $($state.watchPid))..."
+        Stop-Process -Id $state.watchPid -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# 1) 如果调试端口还活着，先在线移除 <style>/<meta>，立即恢复原生外观（覆盖全部页面，含 Chat 视图）
 if ($state -and $state.port) {
     Write-Host "尝试连接 127.0.0.1:$($state.port) 在线移除皮肤..."
-    & node (Join-Path $script:KdsRoot 'engine\inject.mjs') --port $state.port --remove
+    & node (Join-Path $script:KdsRoot 'engine\inject.mjs') --port $state.port --remove --all-pages
 }
 
 # 2) 可选：只关闭"由本工具启动的"那个实例（按 state.json 里的 PID 精确匹配，绝不按进程名批量杀）
