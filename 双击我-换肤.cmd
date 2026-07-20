@@ -7,26 +7,34 @@ setlocal
 cd /d "%~dp0"
 
 echo.
-echo   ========================================
-echo     Kimi Dream Skin - 一键换肤
-echo   ========================================
+echo   ==========================================
+echo     Kimi Dream Skin - 一键换肤 (10 套主题)
+echo   ==========================================
 echo.
-echo     1. 青蓝歌姬   (diva)
-echo     2. 粉雾玫瑰   (rose)
-echo     3. 财神打工   (caishen)
-echo     4. 舞台黑金   (blackgold)
-echo     5. 红白科幻   (scifi)
-echo     6. 哥特虚空   (gothic)   [默认推荐]
+echo     1. 青蓝歌姬      2. 粉雾玫瑰
+echo     3. 财神打工      4. 舞台黑金
+echo     5. 红白科幻      6. 哥特虚空
+echo     7. 敦煌飞天      8. 青花瓷
+echo     9. 千里江山(默认) 10. 水墨佳人
 echo     0. 退出
 echo.
-choice /c 1234560 /n /m "  请选择皮肤编号: "
-if errorlevel 7 exit /b 0
-if errorlevel 6 set THEME=gothic
-if errorlevel 5 set THEME=scifi
-if errorlevel 4 set THEME=blackgold
-if errorlevel 3 set THEME=caishen
-if errorlevel 2 set THEME=rose
-if errorlevel 1 set THEME=diva
+set /p N="  请输入主题编号: "
+if "%N%"=="0" exit /b 0
+if "%N%"=="1" set THEME=diva
+if "%N%"=="2" set THEME=rose
+if "%N%"=="3" set THEME=caishen
+if "%N%"=="4" set THEME=blackgold
+if "%N%"=="5" set THEME=scifi
+if "%N%"=="6" set THEME=gothic
+if "%N%"=="7" set THEME=dunhuang
+if "%N%"=="8" set THEME=qinghua
+if "%N%"=="9" set THEME=jiangshan
+if "%N%"=="10" set THEME=moyun
+if not defined THEME (echo   编号无效 & pause & exit /b 1)
+
+echo.
+choice /c 12 /n /m "  1.经典版  2.惊喜版（同一主题的另一重宇宙）: "
+if errorlevel 2 set THEME=%THEME%-surprise
 
 where node >/dev/null 2>/dev/null
 if errorlevel 1 (

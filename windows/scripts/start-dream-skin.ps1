@@ -8,8 +8,11 @@
 # ============================================================================
 [CmdletBinding()]
 param(
-    [ValidateSet('diva', 'rose', 'caishen', 'blackgold', 'scifi', 'gothic')]
-    [string]$Theme = 'gothic',
+    [ValidateSet('diva', 'rose', 'caishen', 'blackgold', 'scifi', 'gothic',
+        'dunhuang', 'qinghua', 'jiangshan', 'moyun',
+        'diva-surprise', 'rose-surprise', 'caishen-surprise', 'blackgold-surprise', 'scifi-surprise',
+        'gothic-surprise', 'dunhuang-surprise', 'qinghua-surprise', 'jiangshan-surprise', 'moyun-surprise')]
+    [string]$Theme = 'jiangshan',
     [switch]$Watch        # 驻留模式：新窗口/跳转后自动补注入（前台运行，Ctrl+C 停止）
 )
 

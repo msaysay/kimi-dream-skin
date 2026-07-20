@@ -4,18 +4,34 @@
 
 > 🙏 **致敬**：本项目的设计规范、主题方向与哥特虚空配色均借鉴自 Codex Dream Skin，背景图为按其生图方法论全新生成的原创素材，详细声明见 [NOTICE.md](NOTICE.md)。
 
-| 青蓝歌姬 diva | 粉雾玫瑰 rose | 财神打工 caishen |
-| --- | --- | --- |
-| ![diva](screenshots/20-diva.png) | ![rose](screenshots/21-rose.png) | ![caishen](screenshots/22-caishen.png) |
-| **舞台黑金 blackgold** | **红白科幻 scifi** | **哥特虚空 gothic** |
-| ![blackgold](screenshots/23-blackgold.png) | ![scifi](screenshots/25-scifi.png) | ![gothic](screenshots/24-gothic.png) |
+## 为什么做这个（作者的话）
 
-注入前（原生）：[00-baseline.png](screenshots/00-baseline.png)（以上为登录后主界面实测截图。背景图为 AI 生成的原创角色，设计方向临摹 Codex Dream Skin 的歌姬/粉系/财神主题）
+前几天我接连收到两封邮件：一封是 **AWS 发来的 17 亿美金账单**——你没看错，17 亿，美金，是真的收到了（我现在也没想明白他们是怎么算出来的）；另一封是 **Claude 通知我的 Max 账号突然被封**。
+
+一夜之间，两个最贵的 AI 工具同时没了。生气归生气，活还是要干的——既然如此，不如把宝押在咱们自己的国产模型上。我换上了 **Kimi K3**，发现它完全扛得住我的日常开发。这个项目的灵感来自 Codex Dream Skin，我在它的设计规范基础上做了适配 Kimi 桌面版的优化：更多原创国潮主题、双击安装、提示词安装、还有每个主题的"惊喜版"。
+
+如果觉得这个项目有点意思，欢迎 Star，也欢迎扫码找我交流 / 请我喝杯咖啡：
+
+<p align="center"><img src="docs/images/qr-wechat.png" width="220" alt="作者二维码"></p>
+
+| 青蓝歌姬 diva | 粉雾玫瑰 rose | 财神打工 caishen | 舞台黑金 blackgold | 红白科幻 scifi |
+| --- | --- | --- | --- | --- |
+| ![diva](screenshots/20-diva.png) | ![rose](screenshots/21-rose.png) | ![caishen](screenshots/22-caishen.png) | ![blackgold](screenshots/23-blackgold.png) | ![scifi](screenshots/25-scifi.png) |
+| **哥特虚空 gothic** | **敦煌飞天 dunhuang** | **青花瓷 qinghua** | **千里江山 jiangshan（默认）** | **水墨佳人 moyun** |
+| ![gothic](screenshots/24-gothic.png) | ![dunhuang](screenshots/26-dunhuang.png) | ![qinghua](screenshots/27-qinghua.png) | ![jiangshan](screenshots/28-jiangshan.png) | ![moyun](screenshots/29-moyun.png) |
+
+**每套主题都有一个"惊喜版"**——同一个主题的另一重宇宙，装好后在菜单里选"惊喜版"即可解锁：
+
+| 歌姬·夜幕安可 | 敦煌·月夜金飞天 | 江山·初雪 |
+| --- | --- | --- |
+| ![diva-surprise](screenshots/30-diva-surprise.png) | ![dunhuang-surprise](screenshots/31-dunhuang-surprise.png) | ![jiangshan-surprise](screenshots/32-jiangshan-surprise.png) |
+
+注入前（原生）：[00-baseline.png](screenshots/00-baseline.png)（以上为登录后主界面实测截图。背景图均为 AI 生成的原创角色/场景）
 
 ## 特性
 
-- 🎨 六套起手皮肤：青蓝歌姬 / 粉雾玫瑰 / 财神打工 / 舞台黑金 / 红白科幻 / 哥特虚空，2560×1440 级 AI 生成原创角色背景 + 左侧文字安全区遮罩（浅色 ×4 + 暗色 ×2）
-- 🖼️ CSS 变量自定义：`--kds-accent` 换主色、`--kds-bg-image` 换任意背景图
+- 🎨 十套主题 ×2：青蓝歌姬 / 粉雾玫瑰 / 财神打工 / 舞台黑金 / 红白科幻 / 哥特虚空 / 敦煌飞天 / 青花瓷 / 千里江山 / 水墨佳人，每套另有一个"惊喜版"夜景或变奏（共 20 个皮肤）
+- 🖼️ CSS 变量自定义：`--kds-accent` 换主色、`--kds-bg-image` 换任意背景图（本地图片注入时自动内联）
 - 🔌 零依赖：注入引擎只用 Node 22+ 内置的 `fetch` / `WebSocket`
 - 🧭 四个脚本走完全流程：install / start / verify / restore
 - ✅ 自带验证：检查注入标记 + 自动截图存证
@@ -77,12 +93,9 @@ kimi-dream-skin/
       verify.mjs            # 验证注入标记、页面标题/URL，Page.captureScreenshot 截图
       probe.mjs             # DOM 结构探测器（Kimi 更新后重新适配选择器用）
     themes/
-      diva.css              # 青蓝歌姬（青蓝全息舞台 + 原创虚拟歌姬）
-      rose.css              # 粉雾玫瑰（粉雾柔光花园 + 原创玫瑰少女）
-      caishen.css           # 财神打工（宣纸红金 + 原创财神程序员）
-      blackgold.css         # 舞台黑金（暗色：近黑舞台 + 原创黑礼服歌手）
-      scifi.css             # 红白科幻（珊瑚红能量巨球 + 珍珠白未来城）
-      gothic.css            # 哥特虚空（暗色：哥特圣殿之城，配色令牌对齐对方官方预设）
+      diva.css / rose.css / caishen.css / blackgold.css / scifi.css / gothic.css
+      dunhuang.css / qinghua.css / jiangshan.css / moyun.css        # 十套经典主题
+      *-surprise.css                                                # 十套惊喜版（夜景/变奏）
       assets/               # 皮肤背景图（AI 生成，JPEG，注入时自动内联为 data URI）
     scripts/
       common.ps1            # 公共函数（找 Kimi.exe、空闲端口、状态文件）

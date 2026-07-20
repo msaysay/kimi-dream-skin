@@ -22,7 +22,7 @@
 
 把检查结果和执行计划展示给我，得到我确认后再执行：
 - 提醒我手动完全退出 Kimi（包括托盘图标）——注意这会结束我们当前的对话，请把后续步骤写成我可以直接双击的指引；
-- 运行 windows\scripts\start-dream-skin.ps1 -Theme gothic（也可以问我想用哪一套：diva 青蓝歌姬 / rose 粉雾玫瑰 / caishen 财神打工 / blackgold 舞台黑金 / scifi 红白科幻 / gothic 哥特虚空）；
+- 运行 windows\scripts\start-dream-skin.ps1 -Theme jiangshan（也可以问我想用哪一套：diva 青蓝歌姬 / rose 粉雾玫瑰 / caishen 财神打工 / blackgold 舞台黑金 / scifi 红白科幻 / gothic 哥特虚空 / dunhuang 敦煌飞天 / qinghua 青花瓷 / jiangshan 千里江山 / moyun 水墨佳人，每套还有 <主题>-surprise 惊喜版）；
 - 重新打开对话后运行 verify-dream-skin.ps1 验证并截图；
 - 如果验证失败，运行 restore-dream-skin.ps1 还原，不要继续尝试。
 

@@ -25,7 +25,7 @@ description: 在 Windows 上为 Kimi 桌面版（Electron）更换皮肤的操�
 - `engine/inject.mjs` —— 注入引擎（支持 `--watch` 驻留、`--remove` 移除）
 - `engine/verify.mjs` —— 验证标记 + 截图
 - `engine/probe.mjs` —— DOM 结构探测器（选择器失效时重新适配用）
-- `themes/*.css` —— 皮肤文件（diva 青蓝歌姬 / rose 粉雾玫瑰 / caishen 财神打工 / blackgold 舞台黑金 / scifi 红白科幻 / gothic 哥特虚空；背景图在 themes/assets/，注入时自动内联）
+- `themes/*.css` —— 皮肤文件（10 套经典：diva 青蓝歌姬 / rose 粉雾玫瑰 / caishen 财神打工 / blackgold 舞台黑金 / scifi 红白科幻 / gothic 哥特虚空 / dunhuang 敦煌飞天 / qinghua 青花瓷 / jiangshan 千里江山(默认) / moyun 水墨佳人；每套另有 <主题>-surprise 惊喜版，共 20 个。背景图在 themes/assets/，注入时自动内联）
 - `scripts/*.ps1` —— install / start / verify / restore
 
 ## 标准流程

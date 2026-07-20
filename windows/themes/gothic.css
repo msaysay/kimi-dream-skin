@@ -17,13 +17,13 @@
       rgba(10, 9, 8, .84) 30%,
       rgba(10, 9, 8, .52) 50%,
       rgba(10, 9, 8, 0)   72%);
-  --kds-ambient: rgba(12, 11, 10, .62);
+  --kds-ambient: rgba(12, 11, 10, .72);
 
   /* -- 十色令牌（对齐 Codex Dream Skin theme.json） -- */
   --kds-text: #f3ead7;                       /* text：象牙白 */
-  --kds-muted: #b5a386;                      /* 对方原版 muted */     /* muted：暖灰 */
-  --kds-panel: rgba(23, 21, 19, .80);    /* 对方原版 #171513 */        /* panel：深炭面板 */
-  --kds-panel-alt: rgba(33, 29, 24, .93);   /* 对方原版 #211d18 */    /* panelAlt：强面板 */
+  --kds-muted: #cbbd9f;                      /* 对方原版 muted */     /* muted：暖灰 */
+  --kds-panel: rgba(23, 21, 19, .90);    /* 对方原版 #171513 */        /* panel：深炭面板 */
+  --kds-panel-alt: rgba(33, 29, 24, .96);   /* 对方原版 #211d18 */    /* panelAlt：强面板 */
   --kds-line: rgba(200, 165, 90, .30);       /* line：金色可见描边 */
   --kds-accent: #c8a55a;                      /* 对方原版 accent */                     /* accent：香槟金 */
   --kds-accent-alt: #e3c27a;                 /* accentAlt：亮金 */
@@ -69,7 +69,7 @@ html, body {
 .sidebar-scroll-top-mask { display: none; }
 
 .nav-item, .sub-item-content, .conversation-list * {
-  color: var(--kds-muted);
+  color: var(--kds-text);
 }
 .nav-item:hover, .sub-item-content:hover {
   background: rgba(255, 255, 255, .08) !important;
