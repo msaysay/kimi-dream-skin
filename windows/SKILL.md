@@ -1,6 +1,7 @@
 ---
 name: kimi-dream-skin-windows
 description: 在 Windows 上为 Kimi 桌面版（Electron）更换皮肤的操作流程。当用户要求给 Kimi 桌面版换肤、美化界面、注入主题 CSS、验证或恢复皮肤时使用。
+version: 1.0.0category: customizationplatforms:  - windowslicense: MIT
 ---
 
 # Kimi Dream Skin —— AI Agent 操作说明
