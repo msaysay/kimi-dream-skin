@@ -1,6 +1,6 @@
 # 你自己的数据、登录状态和密钥，绝不提交
-data/
-vendor/
+/data/
+/vendor/
 .venv/
 __pycache__/
 *.pyc
