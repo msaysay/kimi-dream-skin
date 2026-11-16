@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>创作者工作台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <nav class="side">
+    <div class="brand">创作者工作台</div>
+    <a data-page="dashboard" class="active">数据看板</a>
+    <a data-page="publish">发布</a>
+    <a data-page="review">复盘</a>
+    <a data-page="accounts">账号</a>
+    <a data-page="jobs">任务 <span id="job-badge" class="badge" hidden></span></a>
+    <a data-page="settings">设置</a>
+    <div class="side-foot">数据只保存在这台电脑上</div>
+  </nav>
+  <main id="main"></main>
+</div>
+<div id="drawer" class="drawer" hidden></div>
+<div id="toast" class="toast" hidden></div>
+<script src="vendor/echarts.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

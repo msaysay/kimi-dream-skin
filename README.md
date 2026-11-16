@@ -1,182 +1,90 @@
-# Kimi Dream Skin
+# 创作者工作台
 
-给 **Windows 版 Kimi 桌面客户端** 换肤的开源小工具。思路与规范致敬 [Fei-Away/Codex-Dream-Skin](https://github.com/Fei-Away/Codex-Dream-Skin)（MIT）：Kimi 是 Electron 应用，以 `--remote-debugging-port` 启动后，通过 CDP（Chrome DevTools Protocol）向页面注入主题 CSS——**不改 app.asar、不碰签名、不读写用户数据，重启即恢复原生**。
+在自己电脑上运行的抖音、小红书、视频号工作台：一个界面里完成**发布**、**自动采集后台数据**和**复盘**。数据只保存在本机。
 
-> 🙏 **致敬**：本项目的设计规范、主题方向与哥特虚空配色均借鉴自 Codex Dream Skin，背景图为按其生图方法论全新生成的原创素材，详细声明见 [NOTICE.md](NOTICE.md)。
+![数据看板](docs/dashboard.png)
+![单条诊断](docs/diagnose.png)
 
-## 为什么做这个（作者的话）
+截图里的作品和数字是内置的虚构示例数据。
 
-前几天我接连收到两封邮件：一封是 **AWS 发来的 17 亿美金账单**——你没看错，17 亿，美金，是真的收到了（我现在也没想明白他们是怎么算出来的）；另一封是 **Claude 通知我的 Max 账号突然被封**。
+## 能做什么
 
-一夜之间，两个最贵的 AI 工具同时没了。生气归生气，活还是要干的——既然如此，不如把宝押在咱们自己的国产模型上。我换上了 **Kimi K3**，发现它完全扛得住我的日常开发。这个项目的灵感来自 Codex Dream Skin，我在它的设计规范基础上做了适配 Kimi 桌面版的优化：更多原创国潮主题、双击安装、提示词安装、还有每个主题的"惊喜版"。
+- **账号**：每个平台扫码登录一次，发布和采集共用这份登录状态。
+- **发布**：一份视频或图文，勾选要发的账号，一次排队发出。支持定时（由平台到点自动发出）、封面、话题；视频号可以只存草稿。
+- **数据采集**：打开你已登录的创作者后台，读取后台页面自己加载的数据，存进本地数据库。工作台开着时每天自动采一次，也可以设成 Windows 计划任务。
+- **数据看板**：同一条内容发到多个平台会自动配成一个作品，放在一起比较。每个指标都和这个账号自己的中位数比。
+- **漏斗诊断**：按「点进来 → 留下来 → 看下去 → 看完 → 有反应 → 转化」六步，标出最先掉队的一步并给出改进方向；附每秒留存曲线和流量来源。
+- **复盘**：规则复盘不需要任何配置；填上大模型的接口后可以生成 AI 复盘。
 
-如果觉得这个项目有点意思，欢迎 Star，也欢迎扫码找我交流 / 请我喝杯咖啡：
+## 安装（Windows）
 
-<p align="center"><img src="docs/images/qr-wechat.png" width="220" alt="作者二维码"></p>
+1. 安装 [Python 3.12](https://www.python.org/downloads/release/python-3129/)，安装时勾选 **Add python.exe to PATH**。发布引擎只支持 Python 3.10 – 3.12。
+2. 下载本仓库并解压（或 `git clone`）。
+3. 双击 **`安装.cmd`**。它会创建虚拟环境、下载发布引擎 [social-auto-upload](https://github.com/dreammis/social-auto-upload)、安装依赖和 Chromium 浏览器，第一次需要几分钟。
+4. 双击 **`启动.cmd`**，浏览器会打开 `http://127.0.0.1:8765`。关掉那个黑色窗口就是停止工作台。
 
-| 青蓝歌姬 diva | 粉雾玫瑰 rose | 财神打工 caishen | 舞台黑金 blackgold | 红白科幻 scifi |
-| --- | --- | --- | --- | --- |
-| ![diva](screenshots/20-diva.png) | ![rose](screenshots/21-rose.png) | ![caishen](screenshots/22-caishen.png) | ![blackgold](screenshots/23-blackgold.png) | ![scifi](screenshots/25-scifi.png) |
-| **哥特虚空 gothic** | **敦煌飞天 dunhuang** | **青花瓷 qinghua** | **千里江山 jiangshan（默认）** | **水墨佳人 moyun** |
-| ![gothic](screenshots/24-gothic.png) | ![dunhuang](screenshots/26-dunhuang.png) | ![qinghua](screenshots/27-qinghua.png) | ![jiangshan](screenshots/28-jiangshan.png) | ![moyun](screenshots/29-moyun.png) |
+想先看看界面：启动后在数据看板点「载入示例数据」。
 
-**每套主题都有一个"惊喜版"**——同一个主题的另一重宇宙，装好后在菜单里选"惊喜版"即可解锁：
+## 第一次使用
 
-| 歌姬·夜幕安可 | 敦煌·月夜金飞天 | 江山·初雪 |
-| --- | --- | --- |
-| ![diva-surprise](screenshots/30-diva-surprise.png) | ![dunhuang-surprise](screenshots/31-dunhuang-surprise.png) | ![jiangshan-surprise](screenshots/32-jiangshan-surprise.png) |
+1. 「账号」页：选平台、起一个备注名、点「添加」，再点「扫码登录」。会弹出一个浏览器窗口，用手机扫码。
+2. 回到「数据看板」，点「立即采集」。进度在「任务」页。
+3. 「发布」页：选文件、填标题和话题、勾选账号、点「开始发布」。建议先用视频号的「只存草稿」试一次。
+4. 「复盘」页：选时间范围，点「规则复盘」。
 
-注入前（原生）：[00-baseline.png](screenshots/00-baseline.png)（以上为登录后主界面实测截图。背景图均为 AI 生成的原创角色/场景）
+每个账号至少要有 3 条作品的数据，才能算出「比平时高/低」和漏斗诊断。
 
-## 特性
+### 每天自动采集
 
-- 🎨 十套主题 ×2：青蓝歌姬 / 粉雾玫瑰 / 财神打工 / 舞台黑金 / 红白科幻 / 哥特虚空 / 敦煌飞天 / 青花瓷 / 千里江山 / 水墨佳人，每套另有一个"惊喜版"夜景或变奏（共 20 个皮肤）
-- 🖼️ CSS 变量自定义：`--kds-accent` 换主色、`--kds-bg-image` 换任意背景图（本地图片注入时自动内联）
-- 🔌 零依赖：注入引擎只用 Node 22+ 内置的 `fetch` / `WebSocket`
-- 🧭 四个脚本走完全流程：install / start / verify / restore
-- ✅ 自带验证：检查注入标记 + 自动截图存证
-- 🛟 安全红线：绝不强杀正在运行的 Kimi、调试端口只绑 127.0.0.1、不碰真实 profile
+工作台开着时，每天到设定的钟点后会自动采集一次（在「设置」页调整）。不想一直开着工作台，可以双击 `设置每日自动采集.cmd`，它会创建一个每天 09:00 运行的 Windows 计划任务。
 
-## 环境要求
+### AI 复盘
 
-- Windows 10/11
-- Kimi 桌面版（默认安装路径 `%LOCALAPPDATA%\Programs\kimi-desktop\Kimi.exe`，脚本会自动探测）
-- Node.js >= 18（建议 >= 22，内置 WebSocket，免装任何 npm 依赖）
+在「设置」页填写大模型的接口地址、模型名和密钥。支持所有兼容 OpenAI 接口的服务（Kimi、DeepSeek、通义千问等）。生成 AI 复盘时，作品标题和数据会发送给你填的这个服务；密钥只存在本机的 `data/settings.json`。
 
-## 快速开始（三选一，按你的习惯来）
+## 需要知道的限制
 
-### 方式 A：双击安装（最简单）
+- **采集依赖各平台后台的内部接口**，没有公开文档。平台改版后采集可能失效，需要更新 `workbench/collect.py`。采集失败时，「任务」页的日志会说明是哪个平台、哪一步。
+- **小红书对自动发布比较敏感**，可能触发验证或限流。发布小红书时建议保持显示浏览器窗口，必要时手动完成。
+- 采集频率保持每天一次即可；每个账号每次默认最多抓 30 条作品的详情。
+- 视频号后台只给大约 6 个点的留存数据，曲线比较粗；它的「快速划走率」和另外两个平台的「2 秒跳出率」口径不完全相同。
+- 只应用于你自己的账号，请遵守各平台的用户协议。
 
-1. 双击仓库根目录的 **`双击我-换肤.cmd`**，按提示选皮肤（1/2/3）。
-2. 如果提示 Kimi 正在运行：手动完全退出 Kimi（包括托盘图标），回车重试。
-3. 想还原：双击 **`双击我-还原.cmd`**。
-
-### 方式 B：一套提示词（让 Kimi Work 自己装）
-
-打开 [PROMPT.md](PROMPT.md)，把里面的提示词原样发给 Kimi Work，它会读仓库、做环境检查、报方案给你确认后再安装。
-
-### 方式 C：手动命令行
-
-```powershell
-cd windows\scripts
-
-# 1) 环境检查（Node 版本 / Kimi.exe 路径 / 皮肤文件）
-powershell -ExecutionPolicy Bypass -File .\install-dream-skin.ps1
-
-# 2) 完全退出 Kimi（包括托盘图标），然后启动换肤
-powershell -ExecutionPolicy Bypass -File .\start-dream-skin.ps1 -Theme diva
-
-# 3) 验证 + 截图
-powershell -ExecutionPolicy Bypass -File .\verify-dream-skin.ps1
-
-# 4) 恢复原生（在线移除皮肤；彻底干净只需正常重启 Kimi）
-powershell -ExecutionPolicy Bypass -File .\restore-dream-skin.ps1
-```
-
-> ⚠️ Kimi 有单实例机制，皮肤必须在启动时附加调试端口才能注入，所以第 2 步前请先**手动完全退出** Kimi。脚本检测到 Kimi 在运行时只会提示，**绝不会替你强制结束进程**。
-
-## 目录结构
-
-```
-kimi-dream-skin/
-  README.md                 # 本文件
-  NOTICE.md                 # 致敬与第三方声明（Codex Dream Skin 致谢、素材权利）
-  PROMPT.md                 # 一套提示词安装方案（发给 Kimi Work 即可）
-  双击我-换肤.cmd            # 双击安装入口（皮肤菜单 + 单实例重试引导）
-  双击我-还原.cmd            # 双击还原官方外观
-  LICENSE                   # MIT
-  windows/
-    SKILL.md                # 面向 AI agent 的操作说明
-    engine/
-      cdp.mjs               # 零依赖 CDP 客户端（HTTP /json 发现 + WebSocket 会话）
-      inject.mjs            # 注入引擎：--theme 注入 / --watch 驻留 / --remove 移除
-      verify.mjs            # 验证注入标记、页面标题/URL，Page.captureScreenshot 截图
-      probe.mjs             # DOM 结构探测器（Kimi 更新后重新适配选择器用）
-    themes/
-      diva.css / rose.css / caishen.css / blackgold.css / scifi.css / gothic.css
-      dunhuang.css / qinghua.css / jiangshan.css / moyun.css        # 十套经典主题
-      *-surprise.css                                                # 十套惊喜版（夜景/变奏）
-      assets/               # 皮肤背景图（AI 生成，JPEG，注入时自动内联为 data URI）
-    scripts/
-      common.ps1            # 公共函数（找 Kimi.exe、空闲端口、状态文件）
-      install-dream-skin.ps1
-      start-dream-skin.ps1
-      verify-dream-skin.ps1
-      restore-dream-skin.ps1
-  docs/
-    how-it-works.md         # 原理说明：Electron + CDP 注入，为什么不改 asar
-  screenshots/              # 验证截图
-```
-
-## 自定义皮肤
-
-复制 `windows/themes/diva.css` 为 `my.css`，改几个变量即可：
-
-```css
-:root {
-  --kds-accent: #ff7a59;                    /* 主强调色 */
-  --kds-bg-image: url("assets/my-bg.jpg");  /* 把图片放进 themes/assets/，注入时自动内联 */
-  --kds-bg-pos: 74% 45%;                    /* 背景焦点（人物/主视觉位置） */
-}
-```
-
-背景图建议 16:9、≥2048 宽，人物/主视觉放在右侧 x=62%~88%，左侧 x=0~52% 保持干净（文字安全区）。
-
-然后 `start-dream-skin.ps1` 的 `-Theme` 参数对应文件名（`-Theme my`，需同时在脚本 `ValidateSet` 里加上名字，或直接用引擎）：
+## 命令行
 
 ```bash
-node windows/engine/inject.mjs --port <端口> --theme my
+.venv\Scripts\python.exe -m workbench            # 启动工作台
+.venv\Scripts\python.exe -m workbench collect    # 采集所有已登录账号
+.venv\Scripts\python.exe -m workbench review --days 7   # 打印一份规则复盘
 ```
 
-设计约定（所有内置皮肤都遵守）：
+## 项目结构
 
-- **不盖拦截层**：只重绘原生节点，不在窗口上叠 `pointer-events` 层，所有控件保持可交互。
-- **深色皮肤必改文字色**：Kimi 页面 URL 固定带 `theme=light`，深底必须覆盖文字颜色保证可读。
-- **登录弹窗保持原生**：`.login-modal` 内的按钮恢复默认配色，不干扰登录流程。
-- **稳健选择器**：优先使用已验证的稳定 class（见下方），避免哈希化的动态 class。
+```text
+workbench/
+  collect.py    用已登录的浏览器读取三个平台后台的数据，原样存到 data/raw/
+  ingest.py     把原始数据整理进 SQLite（data/workbench.db）
+  analytics.py  相对表现、漏斗诊断、跨平台作品配对
+  review.py     规则复盘与 AI 复盘
+  jobs.py       任务队列：登录、发布（调用 social-auto-upload）、采集、复盘
+  server.py     本地网页服务，只监听 127.0.0.1
+  demo.py       示例数据
+web/            界面（单页，无需构建）
+scripts/        安装脚本
+tests/          测试，含一个模拟三个平台后台的假站点
+```
 
-### 已验证的关键选择器（Kimi 3.1.2 / Electron 41 实测）
+`data/`（你的数据和密钥）和 `vendor/`（发布引擎和登录状态）不会进入 git。
 
-| 区域 | 选择器 |
-| --- | --- |
-| 主窗口页面 | `app://localhost/kimi-agent.html`（CDP target 标题 "Kimi Agent"） |
-| 布局骨架 | `.page`、`.sidebar`、`.main-pane`、`.win-titlebar-drag` |
-| 侧栏导航 | `.sidebar-scroll`、`.nav-item`、`.nav-label`、`.section-title`、`.conversation-list` |
-| 输入区 | `.composer`、`.composer-box`、`.composer-editor`、`.send-btn`、`.model-picker-trigger` |
-| 主页 | `.home-view`、`.home-scroll`、`.hero`、`.greeting`、`.mode-tab` |
-| 消息列表 | `.message-list-container`、`.message-list` |
-| 弹窗/按钮 | `.login-modal`、`.kimi-button` |
-
-Kimi 更新后选择器失效？跑一次 `node windows/engine/probe.mjs --port <端口>` 重新探测。
-
-## 手动使用引擎
+## 开发与测试
 
 ```bash
-node windows/engine/inject.mjs --port 9333 --theme diva           # 注入一次
-node windows/engine/inject.mjs --port 9333 --theme diva  --watch  # 驻留：新窗口/跳转自动补注入
-node windows/engine/inject.mjs --port 9333 --remove               # 在线移除皮肤
-node windows/engine/verify.mjs --port 9333 --out shot.png         # 验证 + 截图
-node windows/engine/probe.mjs  --port 9333                        # 探测 DOM 结构
+.venv/bin/python -m pip install pytest
+.venv/bin/python -m pytest tests
 ```
 
-## 安全说明
+采集部分的测试会启动真实的 Chromium，访问 `tests/fake_platforms.py` 里的假后台站点。它验证的是采集流程本身，不能代替在真实平台上的验证。
 
-- 调试端口一律绑定 `127.0.0.1`。
-- 工具不会强制结束任何 Kimi 进程；恢复时也只按状态文件里记录的 PID 操作由本工具启动的实例。
-- 不读取、不写入 `%APPDATA%\kimi-desktop` 里的任何文件。
-- 注入只发生在内存中，磁盘上的 Kimi 零改动，正常重启即 100% 原生。
-- 本项目仅供学习交流，与月之暗面（Moonshot AI）、OpenAI 均无关，非官方产品。设计致敬 Codex Dream Skin，见 NOTICE.md。
+## 致谢
 
-## 参与贡献
-
-欢迎 PR：
-
-1. **新皮肤**：在 `windows/themes/` 加一个 `.css`，遵守上面的设计约定，附一张 verify 截图。
-2. **选择器适配**：Kimi 更新后用 `probe.mjs` 探测并修复选择器。
-3. **跨平台**：目前脚本为 PowerShell（Windows），欢迎贡献 macOS / Linux 版本。
-
-提交前请确认：`install` → `start` → `verify` → `restore` 全流程能跑通，且截图里皮肤确实生效。
-
-## License
-
-[MIT](LICENSE)
+见 [NOTICE.md](NOTICE.md)。MIT 许可。
