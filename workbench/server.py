@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import analytics, comments, config, contents, db, demo, importer, jobs, method, planner
+from . import analytics, benchmarks, comments, config, contents, db, demo, importer, jobs, method, planner, tikhub
 
 ACCOUNT_RE = re.compile(r"^[\w一-鿿-]{1,30}$")
 
@@ -115,8 +115,9 @@ def api_post(con, worker, path, body):
             con.execute("DELETE FROM reviews WHERE id=?", (body.get("id"),))
         return {"ok": True}
     if path == "/api/settings":
-        if body.get("ai_api_key") == "":
-            body.pop("ai_api_key")  # 留空表示不改
+        for key in ("ai_api_key", "tikhub_api_key"):
+            if body.get(key) == "":
+                body.pop(key)  # 留空表示不改
         config.save_settings(body)
         return {"ok": True}
     if path == "/api/demo":
@@ -187,6 +188,50 @@ def api_post(con, worker, path, body):
         if not (config.load_settings()["ai_api_key"] and config.load_settings()["ai_model"]):
             raise ApiError("还没有配置大模型：请在「设置」页填写")
         return {"job": jobs.enqueue(con, "ai_script", {"content_id": int(body["id"]), "kind": body.get("kind") or "script"})}
+    # ---- 对标账号 ----
+    if path == "/api/bench/resolve":
+        if body.get("platform") not in config.PLATFORMS:
+            raise ApiError("请选择平台")
+        try:
+            return {"candidates": tikhub.resolve(body["platform"], body.get("text") or "")}
+        except tikhub.TikHubError as e:
+            raise ApiError(str(e))
+    if path == "/api/bench/add":
+        c = body.get("candidate") or {}
+        if not c.get("uid"):
+            raise ApiError("缺少账号")
+        bid = benchmarks.add(con, body["platform"], c["uid"], c.get("name"), c.get("followers"), c.get("avatar"), c.get("note"), body.get("grp"))
+        return {"id": bid, "job": jobs.enqueue(con, "bench", {"bench_id": bid})}
+    if path == "/api/bench/refresh":
+        if not config.load_settings()["tikhub_api_key"]:
+            raise ApiError("还没有配置 TikHub：请在「设置 → 对标账号」里填 API Key")
+        return {"job": jobs.enqueue(con, "bench", {"bench_id": body.get("bench_id")})}
+    if path == "/api/bench/update":
+        with con:
+            con.execute("UPDATE benchmarks SET enabled=COALESCE(?, enabled), grp=COALESCE(?, grp) WHERE id=?",
+                        (None if body.get("enabled") is None else int(bool(body["enabled"])), body.get("grp"), int(body["id"])))
+        return {"ok": True}
+    if path == "/api/bench/delete":
+        benchmarks.remove(con, int(body["id"]))
+        return {"ok": True}
+    if path == "/api/bench/mark":
+        try:
+            benchmarks.mark(con, body["platform"], body["post_id"], body.get("status"), body.get("tags"), body.get("analysis"))
+        except ValueError as e:
+            raise ApiError(str(e))
+        return {"ok": True}
+    if path == "/api/bench/analyze":
+        if not (config.load_settings()["ai_api_key"] and config.load_settings()["ai_model"]):
+            raise ApiError("还没有配置大模型：请在「设置」页填写")
+        posts = [[x["platform"], x["post_id"]] for x in body.get("posts") or []]
+        if not posts:
+            raise ApiError("没有要拆解的作品")
+        return {"job": jobs.enqueue(con, "bench_analyze", {"posts": posts})}
+    if path == "/api/bench/to_content":
+        try:
+            return {"id": benchmarks.to_content(con, body["platform"], body["post_id"])}
+        except ValueError as e:
+            raise ApiError(str(e))
     # ---- 评论 ----
     if path == "/api/comments/fetch":
         require_account(con, body.get("platform"), body.get("account"))
@@ -254,6 +299,13 @@ def api_get(con, worker, path, query):
                 "verdicts": method.VERDICTS, "jumps": method.JUMPS, "roles": method.PLATFORM_ROLES, "metric_names": method.METRIC_NAMES,
                 "profile_fields": method.PROFILE_FIELDS, "profile": method.load_profile(), "params": method.load_params(),
                 "workflows": contents.load_workflows(), "workflows_text": contents.workflows_text(), "week": planner.week_label()}
+    if path == "/api/bench":
+        days = int((query.get("days") or ["30"])[0])
+        d = benchmarks.load(con, days)
+        d.pop("posts_by_key")
+        all_posts = db.rows(con, "SELECT COUNT(*) AS n FROM bench_posts")[0]["n"]
+        return {**d, "usage": benchmarks.usage(con), "daily_cost": benchmarks.daily_cost(con), "post_total": all_posts,
+                "prices": tikhub.PRICES, "status_names": benchmarks.STATUS}
     if path == "/api/contents":
         return {"contents": contents.with_acceptance(con, contents.list_all(con, bool(query.get("all"))))}
     if path == "/api/comments":

@@ -192,7 +192,7 @@ def test_rule_review_and_summary(con, tmp_path):
     assert "4.6 倍" in text and "双强型" in text and "仅自己可见" in text and "S5 转化没有数据" in text
     data = analytics.build(con)
     json.dumps(review.summarize(data), default=str)  # 要能原样发给大模型
-    assert "没有作品数据" in review.rule_report(analytics.build(con, 0.0001))
+    assert "没有自己的作品数据" in review.rule_report(analytics.build(con, 0.0001))
 
 
 def test_ai_requires_config(con):
@@ -413,3 +413,95 @@ def test_fetch_comments_requires_login(fake_site, tmp_path):
         comments.fetch("douyin", "主号", log=lambda m: None, state_file=state_file(tmp_path, False))
     with pytest.raises(RuntimeError, match="手动粘贴"):
         comments.fetch("xhs", "主号")
+
+
+# ---------- 对标账号（假的 TikHub） ----------
+import fake_tikhub
+
+
+@pytest.fixture()
+def tikhub_site(con):
+    port = free_port()
+    httpd = fake_tikhub.start(port)
+    fake_tikhub.CALLS.clear()
+    config.save_settings({"tikhub_api_key": fake_tikhub.KEY, "tikhub_base_url": f"http://127.0.0.1:{port}"})
+    yield port
+    httpd.shutdown()
+
+
+def test_resolve_accounts_from_links(tikhub_site):
+    from workbench import tikhub
+    c = tikhub.resolve("douyin", "https://www.douyin.com/user/MS4wLjABAAAAabc?from_tab_name=main")[0]
+    assert c["uid"] == "MS4wLjABAAAAabc" and c["name"] == "对标抖音号" and c["followers"] == 120000
+    assert tikhub.resolve("douyin", "看看这个 https://v.douyin.com/abc/ 复制打开")[0]["uid"] == "MS4wLjABAAAAshortlink"
+    c = tikhub.resolve("xhs", "https://www.xiaohongshu.com/user/profile/63d11800000000002702bee2?xsec_token=x")[0]
+    assert c["uid"] == "63d11800000000002702bee2" and c["followers"] == 5000
+    assert tikhub.resolve("channels", "sphABC123")[0]["uid"] == "v2_fromsph@finder"
+    assert tikhub.resolve("channels", "v2_direct@finder")[0]["uid"] == "v2_direct@finder"
+    found = tikhub.resolve("channels", "对标")
+    assert found[0]["uid"] == "v2_searched@finder" and found[0]["name"] == "对标视频号"
+    with pytest.raises(tikhub.TikHubError, match="主页链接"):
+        tikhub.resolve("douyin", "随便写的")
+
+
+def test_bad_key_is_reported(tikhub_site):
+    from workbench import tikhub
+    config.save_settings({"tikhub_api_key": "wrong"})
+    with pytest.raises(tikhub.TikHubError, match="API Key"):
+        tikhub.fetch_posts("douyin", "MS4w")
+
+
+def test_benchmark_hits_breakdown_and_reuse(tikhub_site, con):
+    from workbench import benchmarks
+    for pf, uid, name in (("douyin", "MS4wX", "抖音对标"), ("xhs", "a" * 24, "小红书对标"), ("channels", "v2_x@finder", "v2_x@finder")):
+        benchmarks.add(con, pf, uid, name)
+    assert benchmarks.refresh(con, log=lambda m: None) == (3, 24)
+    data = benchmarks.load(con, 0)
+    names = {b["platform"]: b["name"] for b in data["benchmarks"]}
+    assert names["channels"] == "对标视频号"  # 填 finder username 时用作品作者名
+    hits = data["hits"]
+    # 每个号只有第 3 条（6 倍）是爆款；置顶的那条不算
+    assert sorted((p["platform"], p["post_id"]) for p in hits) == sorted([("douyin", "dy2"), ("xhs", f"{2:024x}"), ("channels", "15056857243102874002")])
+    assert all(5 < p["ratio"] < 7 for p in hits)
+    d = next(p for p in hits if p["platform"] == "douyin")
+    assert d["inter"] == 6000 and d["latest"]["plays"] is None and d["duration_sec"] == 30
+    # 再读一次：作品不重复，快照追加，拆解不被覆盖
+    benchmarks.mark(con, "douyin", "dy2", tags={"motif": "AI 工具实测", "archetype": "清单型", "hook_open": "结果奇观", "hook_end": "自造钩子"},
+                    analysis="数字开头")
+    benchmarks.refresh(con, log=lambda m: None)
+    assert con.execute("SELECT COUNT(*) FROM bench_posts").fetchone()[0] == 24
+    d = next(p for p in benchmarks.load(con, 0)["hits"] if p["post_id"] == "dy2")
+    assert d["status"] == "studied" and d["tags"] == {"motif": "AI 工具实测", "archetype": "清单型", "hook_open": "结果奇观"}  # 字典外的值被丢掉
+    assert d["analysis"] == "数字开头" and d["growth_per_day"] is not None
+    assert benchmarks.load(con, 0)["structure"]["archetype"] == [("清单型", 1)]
+    # 进计划：拆解过的爆款变成 P1 选题，进了计划就不再重复推荐
+    items, notes = benchmarks.plan_candidates(con, days=0)
+    assert [c["bench"] for c in items] == [("douyin", "dy2")] and items[0]["tags"]["archetype"] == "清单型"
+    assert notes and "2 条爆款还没拆解" in notes[0]
+    created = planner.generate(con, days=0)
+    c = contents.get(con, created[-1])
+    assert c["source"] == "plan" and c["verdict_from"] == "对标爆款" and c["archetype"] == "清单型"
+    assert benchmarks.plan_candidates(con, days=0)[0] == []
+    # 一键复刻
+    cid = benchmarks.to_content(con, "xhs", f"{2:024x}")
+    c = contents.get(con, cid)
+    assert c["source"] == "benchmark" and "倍" in c["basis"] and c["archetype"] is None  # 没拆解的也能复刻，只是没有结构标签
+    assert benchmarks.to_content(con, "xhs", f"{2:024x}") == cid
+    # 计费记录：3 个账号读了两次，视频号 0.01 一次
+    u = benchmarks.usage(con)
+    assert u["calls"] == 6 and abs(u["cost"] - 2 * (0.001 + 0.002 + 0.01)) < 1e-9
+    review_id = review.create(con, None, False)
+    assert "对标信号" in db.rows(con, "SELECT content FROM reviews WHERE id=?", review_id)[0]["content"]
+    benchmarks.remove(con, data["benchmarks"][0]["id"])
+    assert con.execute("SELECT COUNT(*) FROM bench_posts WHERE platform='douyin'").fetchone()[0] == 0
+
+
+def test_bench_api(api, tikhub_site):
+    status, body = api("/api/bench/resolve", {"platform": "douyin", "text": "https://www.douyin.com/user/MS4wABC"})
+    assert status == 200 and body["candidates"][0]["name"] == "对标抖音号"
+    status, body = api("/api/bench/add", {"platform": "douyin", "candidate": body["candidates"][0], "grp": "AI 工具"})
+    assert status == 200 and body["job"]
+    state = api("/api/bench")[1]
+    assert state["benchmarks"][0]["grp"] == "AI 工具" and state["daily_cost"] == 0.001
+    assert api("/api/bench/analyze", {"posts": [{"platform": "douyin", "post_id": "x"}]})[0] == 400  # 没配大模型
+    assert "tikhub_api_key" not in api("/api/state")[1]["settings"]

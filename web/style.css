@@ -125,6 +125,11 @@ pre.log { background: var(--hover); border-radius: 8px; padding: 10px 12px; font
 .rule { padding: 6px 0; border-bottom: 1px solid var(--line); }
 .rule-form { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+.cands { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.cand { padding: 6px 0; } .cand img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
+.cover { width: 120px; max-height: 180px; object-fit: cover; border-radius: 8px; margin-right: 14px; }
+.bar-row { display: grid; grid-template-columns: 1fr 80px 24px; gap: 6px; align-items: center; font-size: 13px; margin: 4px 0; }
+.bar { height: 6px; border-radius: 3px; background: var(--accent); display: block; }
 @media (max-width: 900px) {
   .app { flex-direction: column; } .side { width: auto; height: auto; position: static; flex-direction: row; flex-wrap: wrap; padding: 10px; }
   .brand, .side-foot { display: none; } main { padding: 16px; }

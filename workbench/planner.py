@@ -153,6 +153,10 @@ def generate(con, days=14, ai=False, log=print):
     """生成本周计划并写进「内容」，已有同名条目就跳过。返回新建的内容编号。"""
     data = analytics.build(con, days)
     items, notes = candidates(data, top_questions(con, days))
+    from . import benchmarks
+    bench_items, bench_notes = benchmarks.plan_candidates(con)
+    items += bench_items
+    notes += bench_notes
     week = week_label()
     today = datetime.date.today()
     ahead = [d for d in week_days() if d >= today] or [today]
@@ -169,6 +173,9 @@ def generate(con, days=14, ai=False, log=print):
                                       verdict_from=c["verdict_from"], schedule_date=str(slots[min(i, len(slots) - 1)]),
                                       workflow=contents.pick_workflow(tags)))
         created.append(cid)
+        if c.get("bench"):  # 对标爆款进了计划，就标成已复刻，下周不再重复推荐
+            with con:
+                con.execute("UPDATE bench_posts SET content_id=?, status='used' WHERE platform=? AND post_id=?", (cid, *c["bench"]))
     log(f"本周（{week}）新增 {len(created)} 条选题" + ("；" + "；".join(notes) if notes else ""))
     if ai and created:
         refine_titles(con, created, log)

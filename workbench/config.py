@@ -28,6 +28,12 @@ DEFAULT_SETTINGS = {
     "ai_base_url": "https://api.moonshot.cn/v1",
     "ai_api_key": "",
     "ai_model": "",
+    # 对标账号（TikHub）
+    "tikhub_api_key": "",
+    "tikhub_base_url": "https://api.tikhub.io",  # 国内网络可以换成 https://api.tikhub.dev
+    "bench_auto": True,      # 工作台开着时每天刷新一次对标账号
+    "bench_pages": 1,        # 每个账号每次读几页作品（每页一次计费）
+    "bench_hit_ratio": 3,    # 互动量达到该账号中位数的几倍算爆款
 }
 
 
@@ -63,6 +69,7 @@ def public_settings():
     """给前端看的设置：不回传密钥本身。"""
     s = load_settings()
     s["ai_api_key_set"] = bool(s.pop("ai_api_key"))
+    s["tikhub_api_key_set"] = bool(s.pop("tikhub_api_key"))
     return s
 
 

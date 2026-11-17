@@ -6,7 +6,7 @@ const css = (name) => getComputedStyle(document.documentElement).getPropertyValu
 
 const S = {
   page: "dashboard", state: null, method: null, data: null, days: 30, reviews: [], contents: [], comments: null,
-  openJob: null, jobLog: "", commentTab: "todo", editing: null, editRule: null,
+  openJob: null, jobLog: "", commentTab: "todo", editing: null, editRule: null, bench: null, benchDays: 30, benchCands: null, benchTab: "hits",
   form: { kind: "video", files: "", cover: "", title: "", desc: "", tags: "", schedule: "", headless: false, targets: {}, drafts: {}, content_id: null },
 };
 
@@ -49,7 +49,7 @@ const VERDICT_CLASS = { "双强型": "good", "泛流量型": "warn", "垂直型"
 const verdictTag = (v) => (v ? `<span class="tag v-${VERDICT_CLASS[v] || ""}">${{ good: "✓", warn: "▲", info: "◆", bad: "✕" }[VERDICT_CLASS[v]] || "●"} ${v}</span>` : "");
 const LEVEL_ICON = { "优秀": "✓", "良好": "●", "及格": "○", "偏弱": "✕", "无数据": "—" };
 const JOB_NAME = { login: "扫码登录", check: "检查登录", publish: "发布", collect: "采集数据", review: "生成复盘", plan: "生成选题计划",
-  refine: "AI 细化选题标题", ai_script: "AI 写稿", comments: "抓评论", comment_send: "发送评论回复" };
+  refine: "AI 细化选题标题", ai_script: "AI 写稿", comments: "抓评论", comment_send: "发送评论回复", bench: "刷新对标账号", bench_analyze: "AI 拆解对标爆款" };
 const STATUS_NAME = { pending: "排队中", running: "进行中", done: "完成", failed: "失败", cancelled: "已取消" };
 const ACC_STATUS = { ok: "已登录", expired: "登录过期", unknown: "未登录", demo: "示例" };
 function jobTitle(j) {
@@ -398,6 +398,69 @@ function commentsPage() {
       </div></div></div>`;
 }
 
+// ---------- 对标 ----------
+const STATUS_CLASS = { new: "", studied: "info", used: "good", ignored: "" };
+function benchPage() {
+  const B = S.bench;
+  if (!B) return `<div class="card sub">加载中…</div>`;
+  const keySet = S.state.settings.tikhub_api_key_set;
+  const head = `<div class="head"><h1>对标</h1><span class="sub">盯住同赛道的号，找出它们的爆款，拆成结构再拿来用</span><div class="grow"></div>
+    <div class="seg">${[[7, "近 7 天"], [30, "近 30 天"], [90, "近 90 天"], [0, "全部"]].map(([v, t]) => `<button data-act="bench-days" data-v="${v}" class="${S.benchDays === v ? "on" : ""}">${t}</button>`).join("")}</div>
+    <button data-act="bench-refresh" ${keySet && B.benchmarks.length ? "" : "disabled"}>刷新全部</button></div>`;
+  const banner = keySet ? "" : `<div class="banner">还没有配置 TikHub：对标账号的数据要通过 TikHub 读取。<button class="small" data-act="go" data-page="settings" style="margin-left:10px">去填写 API Key</button></div>`;
+  const cands = S.benchCands ? `<div class="cands"><div class="sub">选一个账号加入对标：</div>${S.benchCands.list.map((c, i) => `<div class="row cand">
+      ${c.avatar ? `<img src="${esc(c.avatar)}" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<b>${esc(c.name)}</b><span class="sub grow">${c.followers ? num(c.followers) + " 粉丝 · " : ""}${esc((c.note || "").slice(0, 40))}</span>
+      <button class="small primary" data-act="bench-add" data-i="${i}">加入</button></div>`).join("")}</div>` : "";
+  const add = `<div class="card"><h2>添加对标账号</h2><div class="row">
+      <select id="bench-pf" style="width:110px">${PF.map((p) => `<option value="${p}">${pfName(p)}</option>`).join("")}</select>
+      <div class="grow"><input id="bench-text" placeholder="抖音 / 小红书填主页链接；视频号填视频号 ID（sph 开头）、finder username 或账号名"></div>
+      <input id="bench-grp" placeholder="分组（可选）" style="width:130px"><button class="primary" data-act="bench-resolve" ${keySet ? "" : "disabled"}>查找</button></div>
+    <p class="hint" style="margin-bottom:0">每次读取都会在 TikHub 扣费：抖音约 $${B.prices.douyin}/次，小红书约 $${B.prices.xhs}/次，视频号 $${B.prices.channels}/次。按现在的账号，每天自动刷新约 $${B.daily_cost}；近 30 天共调用 ${B.usage.calls} 次，约 $${B.usage.cost}。</p>${cands}</div>`;
+  const accounts = B.benchmarks.length ? `<div class="card"><h2>对标账号 <span class="sub" style="font-weight:400">中位互动 = 最近作品（不含置顶）赞评转藏之和的中位数，爆款 = 达到它的 ${B.ratio} 倍</span></h2>
+    <div class="table-wrap"><table><thead><tr><th>账号</th><th>粉丝</th><th>作品</th><th>中位互动</th><th>爆款</th><th>上次读取</th><th></th></tr></thead><tbody>
+    ${B.benchmarks.map((b) => `<tr><td>${pfDot(b.platform)}<b>${esc(b.name)}</b>${b.grp ? ` <span class="chip">${esc(b.grp)}</span>` : ""}${b.enabled ? "" : ` <span class="tag">已停用</span>`}
+        ${b.last_error ? `<div class="hint warn-text">${esc(b.last_error)}</div>` : ""}</td>
+      <td class="num-cell">${num(b.followers)}</td><td class="num-cell">${b.post_count}</td><td class="num-cell">${b.median == null ? `<span class="hint">不到 5 条</span>` : num(b.median)}</td>
+      <td class="num-cell">${b.hits}</td><td class="sub">${dt(b.last_fetch)}</td>
+      <td style="text-align:right;white-space:nowrap"><button class="small" data-act="bench-refresh" data-id="${b.id}" ${keySet ? "" : "disabled"}>刷新</button>
+        <button class="small" data-act="bench-toggle" data-id="${b.id}" data-on="${b.enabled ? 0 : 1}">${b.enabled ? "停用" : "启用"}</button>
+        <button class="small danger" data-act="bench-del" data-id="${b.id}" data-name="${esc(b.name)}">删除</button></td></tr>`).join("")}</tbody></table></div></div>` : "";
+  const st = B.structure;
+  const bars = (field, title) => `<div><div class="sub">${title}</div>${st[field].length ? st[field].slice(0, 5).map(([v, n]) => `<div class="bar-row"><span>${esc(v)}</span><span class="bar" style="width:${Math.round(n / st[field][0][1] * 100)}%"></span><span class="sub">${n}</span></div>`).join("") : `<div class="hint">—</div>`}</div>`;
+  const structCard = st.tagged ? `<div class="card"><h2>爆款结构分布 <span class="sub" style="font-weight:400">拆解过的 ${st.tagged} 条爆款里各标签出现的次数，对标号验证过的结构复刻风险最低</span></h2>
+    <div class="grid k4" style="margin:0">${bars("motif", "母题")}${bars("archetype", "原型")}${bars("hook_open", "开头钩")}${bars("hook_end", "结尾钩")}</div></div>` : "";
+  const untagged = B.hits.filter((p) => p.status === "new").map((p) => [p.platform, p.post_id]);
+  const hits = `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">对标爆款</h2><span class="sub">${B.hits.length} 条，按爆款倍数排序</span><span class="grow"></span>
+      ${untagged.length ? `<button class="small" data-act="bench-analyze-all" ${aiReady() ? "" : "disabled title='先在设置页配置大模型'"}>AI 拆解未拆解的 ${Math.min(untagged.length, 10)} 条</button>` : ""}</div>
+    ${B.hits.length ? `<div class="table-wrap"><table><thead><tr><th>作品</th><th>互动</th><th>倍数</th><th>结构</th><th>状态</th></tr></thead><tbody>
+    ${B.hits.map((p, i) => `<tr class="click" data-act="bench-open" data-i="${i}"><td class="title-cell"><div class="t" title="${esc(p.title)}">${esc(cleanTitle(p.title))}</div>
+        <div class="sub">${pfDot(p.platform)}${esc(p.bench_name)} · ${day(p.post_time)}${p.duration_sec ? " · " + sec(p.duration_sec) : ""}</div></td>
+      <td class="num-cell">${num(p.inter)}<div class="hint">赞 ${num(p.latest.likes)} · 评 ${num(p.latest.comments)} · 转 ${num(p.latest.shares)} · 藏 ${num(p.latest.collects)}</div></td>
+      <td class="num-cell"><b>×${p.ratio.toFixed(1)}</b></td><td>${tagChips(p.tags) || `<span class="hint">未拆解</span>`}</td>
+      <td><span class="tag v-${STATUS_CLASS[p.status]}">${B.status_names[p.status]}</span></td></tr>`).join("")}</tbody></table></div>`
+      : `<p class="sub">${B.benchmarks.length ? "这段时间没有达到爆款倍数的作品。新加的账号要读到 5 条以上作品才算得出中位数。" : "先添加几个对标账号。"}</p>`}</div>`;
+  return head + banner + add + accounts + structCard + hits;
+}
+function benchDrawer(p) {
+  const L = p.latest;
+  return `<div class="panel"><div class="head"><div class="grow"><h1 style="font-size:17px">${esc(cleanTitle(p.title).slice(0, 80))}</h1>
+      <div class="sub">${pfDot(p.platform)}${esc(p.bench_name)} · ${dt(p.post_time)} 发布${p.duration_sec ? " · 时长 " + sec(p.duration_sec) : ""}${p.url ? ` · <a href="${esc(p.url)}" target="_blank" rel="noreferrer">打开原作品</a>` : ""}</div></div>
+      <button data-act="close-drawer">关闭</button></div>
+    <div class="card"><div class="row" style="align-items:flex-start">${p.cover ? `<img class="cover" src="${esc(p.cover)}" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<div class="grow">
+      <div class="scores"><div><div class="sub">互动</div><div class="big">${num(p.inter)}</div></div><div><div class="sub">爆款倍数</div><div class="big">×${p.ratio ? p.ratio.toFixed(1) : "—"}</div></div>
+        <div><div class="sub">每天新增</div><div class="big">${p.growth_per_day == null ? "—" : num(p.growth_per_day)}</div></div><div><div class="sub">状态</div><div><span class="tag v-${STATUS_CLASS[p.status]}">${S.bench.status_names[p.status]}</span></div></div></div>
+      <p class="hint">赞 ${num(L.likes)} · 评论 ${num(L.comments)} · 转发 ${num(L.shares)} · 收藏 ${num(L.collects)}${L.plays ? " · 播放 " + num(L.plays) : ""}</p>
+      <p style="white-space:pre-wrap;margin:0">${esc(p.title)}</p></div></div></div>
+    <div class="card"><h2>拆解：给它打和自己作品同一套标签</h2><div class="grid k3" style="margin:0">${["motif", "archetype", "hook_open", "hook_mid", "hook_end", "duration_bin"].map((f) => tagSelect(f, p.tags[f], "data-btag")).join("")}</div>
+      ${p.tags.archetype ? comboHint(p.tags) : ""}
+      <label class="field"><span>拆解笔记（开头怎么抓人、结构怎么推进、结尾留了什么动作、为什么能爆、我们怎么借）</span><textarea id="bench-analysis" style="min-height:180px">${esc(p.analysis || "")}</textarea></label>
+      <div class="row"><button class="primary" data-act="bench-save">保存拆解</button>
+        <button data-act="bench-analyze" ${aiReady() ? "" : "disabled title='先在设置页配置大模型'"}>AI 拆解</button>
+        <span class="grow"></span><button data-act="bench-ignore">${p.status === "ignored" ? "取消忽略" : "忽略这条"}</button>
+        <button class="primary" data-act="bench-use" ${p.tags.archetype ? "" : "disabled title='先拆解出原型'"}>${p.content_id ? "打开复刻选题" : "用这个结构做一条"}</button></div>
+      <p class="hint">借结构不借选题：结构标签会带到「创作」里，选题要换成自己能兑现的内容，并先过定位三闸。</p></div></div>`;
+}
+
 // ---------- 复盘 ----------
 function reviewPage() {
   const running = S.state.jobs.some((j) => j.type === "review" && (j.status === "pending" || j.status === "running"));
@@ -515,7 +578,16 @@ function settingsPage() {
     <label class="field"><span>接口地址</span><input id="st-url" value="${esc(s.ai_base_url)}"></label>
     <label class="field"><span>模型名</span><input id="st-model" value="${esc(s.ai_model)}" placeholder="填你的服务商提供的模型名"></label>
     <label class="field"><span>密钥${s.ai_api_key_set ? "（已保存，留空表示不修改）" : ""}</span><input id="st-key" type="password" autocomplete="off"></label>
-  </div></div><div class="row" style="margin-bottom:16px"><button class="primary" data-act="save-settings">保存采集与大模型设置</button></div>
+  </div></div>
+  <div class="card"><h2>对标账号（TikHub）</h2>
+    <p class="hint">对标账号的公开作品通过 <a href="https://tikhub.io" target="_blank" rel="noreferrer">TikHub</a> 读取，按次计费。密钥只保存在这台电脑的 data/settings.json 里。</p>
+    <div class="grid k3" style="margin:0"><label class="field"><span>API Key${s.tikhub_api_key_set ? "（已保存，留空表示不修改）" : ""}</span><input id="st-th-key" type="password" autocomplete="off"></label>
+      <label class="field"><span>接口地址</span><select id="st-th-url">${["https://api.tikhub.io", "https://api.tikhub.dev"].map((u) => `<option ${u === s.tikhub_base_url ? "selected" : ""}>${u}</option>`).join("")}</select></label>
+      <label class="field"><span>爆款倍数（互动达到该号中位数的几倍）</span><input id="st-th-ratio" type="number" min="2" max="20" value="${s.bench_hit_ratio}"></label>
+      <label class="field"><span>每个账号每次读几页（每页一次计费，约 15–20 条）</span><input id="st-th-pages" type="number" min="1" max="5" value="${s.bench_pages}"></label>
+      <label class="field"><input type="checkbox" id="st-th-auto" ${s.bench_auto ? "checked" : ""}>工作台开着时每天自动刷新一次</label></div>
+    <p class="hint">国内网络连不上 api.tikhub.io 时换成 api.tikhub.dev。</p></div>
+  <div class="row" style="margin-bottom:16px"><button class="primary" data-act="save-settings">保存采集、大模型与对标设置</button></div>
   <div class="card"><h2>数据</h2>
     <label class="field"><span>导入《内容数据工作台.xlsx》（读取「01 底表」「04 内容结构标签」「08 流量结构与长尾」）</span>
       <div class="row"><div class="grow"><input id="imp-path" placeholder="表格的完整路径"></div><button data-act="pick-xlsx">选择文件</button><button class="primary" data-act="import-xlsx">导入</button></div></label>
@@ -523,7 +595,7 @@ function settingsPage() {
 }
 
 // ---------- 渲染与轮询 ----------
-const PAGES = { dashboard, review: reviewPage, plan: planPage, create: createPage, comments: commentsPage, publish: publishPage, accounts: accountsPage, jobs: jobsPage, settings: settingsPage };
+const PAGES = { dashboard, bench: benchPage, review: reviewPage, plan: planPage, create: createPage, comments: commentsPage, publish: publishPage, accounts: accountsPage, jobs: jobsPage, settings: settingsPage };
 function live() {
   const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
   set("live-publish", jobsTable(S.state.jobs.filter((j) => j.type === "publish").slice(0, 10), "还没有发布记录。"));
@@ -543,6 +615,7 @@ async function go(page) {
   if (page === "review") S.reviews = (await api("/api/reviews")).reviews;
   if (["plan", "create", "publish"].includes(page)) S.contents = (await api("/api/contents")).contents;
   if (page === "comments") S.comments = await api("/api/comments");
+  if (page === "bench") S.bench = await api(`/api/bench?days=${S.benchDays}`);
   render();
 }
 let lastDone = null, pollTimer;
@@ -555,6 +628,7 @@ async function poll() {
     lastDone = done;
     // 有任务刚结束：刷新受影响的页面（正在编辑的表单不整页重画）
     if (changed && !["publish", "settings"].includes(S.page) && $("#drawer").hidden) await go(S.page);
+    else if (changed && S.benchOpen && !$("#drawer").hidden && !S.editing) await reopenBench();
     else if (changed && S.editing && !$("#drawer").hidden) {
       S.contents = (await api("/api/contents")).contents;
       const fresh = S.contents.find((c) => c.id === S.editing.id);
@@ -571,6 +645,12 @@ async function refresh() {
   clearTimeout(pollTimer); pollTimer = setTimeout(poll, 1000);  // 刚发起了操作，尽快再查一次进度
 }
 async function reloadMethod() { S.method = await api("/api/method"); }
+async function reopenBench() {
+  S.bench = await api(`/api/bench?days=${S.benchDays}`);
+  const p = S.bench.hits.find((x) => x.platform === S.benchOpen.platform && x.post_id === S.benchOpen.post_id);
+  if (p) { S.benchOpen = p; $("#drawer").innerHTML = benchDrawer(p); } else { $("#drawer").hidden = true; }
+  if (S.page === "bench") render();
+}
 
 // ---------- 事件 ----------
 const acc = (el) => ({ platform: el.dataset.platform, account: el.dataset.account });
@@ -582,7 +662,7 @@ const ACTIONS = {
   "demo-load": async () => { await api("/api/demo", { action: "load" }); await refresh(); await go("dashboard"); },
   "demo-clear": async () => { if (!confirm("清除所有示例数据？你自己的数据不受影响。")) return; await api("/api/demo", { action: "clear" }); await refresh(); await go(S.page); },
   "open-work": (el) => { const w = S.data.works[+el.dataset.i]; S.editing = null; const d = $("#drawer"); d.innerHTML = workDrawer(w); d.hidden = false; drawCharts(w); },
-  "close-drawer": () => { $("#drawer").hidden = true; S.editing = null; },
+  "close-drawer": () => { $("#drawer").hidden = true; S.editing = null; S.benchOpen = null; },
   "save-work-tags": async (el) => {
     const w = S.data.works[+el.dataset.i];
     const tags = {}; $("#drawer").querySelectorAll("[data-wtag]").forEach((s) => { if (s.value) tags[s.dataset.wtag] = s.value; });
@@ -652,6 +732,39 @@ const ACTIONS = {
   "content-archive": async () => { if (!confirm("归档这条选题？")) return; await api("/api/contents/archive", { id: S.editing.id });
     $("#drawer").hidden = true; S.editing = null; await go(S.page); },
   "comment-tab": (el) => { S.commentTab = el.dataset.v; render(); },
+  "bench-days": async (el) => { S.benchDays = +el.dataset.v; await go("bench"); },
+  "bench-resolve": async () => {
+    toast("正在查找…");
+    const r = await api("/api/bench/resolve", { platform: $("#bench-pf").value, text: $("#bench-text").value });
+    S.benchCands = { platform: $("#bench-pf").value, grp: $("#bench-grp").value, list: r.candidates }; render();
+  },
+  "bench-add": async (el) => {
+    const c = S.benchCands;
+    await api("/api/bench/add", { platform: c.platform, grp: c.grp, candidate: c.list[+el.dataset.i] });
+    S.benchCands = null; toast("已加入，正在读取作品…"); await refresh(); await go("bench");
+  },
+  "bench-refresh": async (el) => { await api("/api/bench/refresh", { bench_id: el.dataset.id ? +el.dataset.id : null }); toast("正在读取，进度见「任务」页"); await refresh(); },
+  "bench-toggle": async (el) => { await api("/api/bench/update", { id: +el.dataset.id, enabled: !!+el.dataset.on }); await go("bench"); },
+  "bench-del": async (el) => { if (!confirm(`删除对标账号「${el.dataset.name}」？它的作品和拆解都会删掉。`)) return; await api("/api/bench/delete", { id: +el.dataset.id }); await go("bench"); },
+  "bench-open": (el) => { S.benchOpen = S.bench.hits[+el.dataset.i]; const d = $("#drawer"); d.innerHTML = benchDrawer(S.benchOpen); d.hidden = false; },
+  "bench-save": async () => {
+    const p = S.benchOpen, tags = {};
+    $("#drawer").querySelectorAll("[data-btag]").forEach((s) => { if (s.value) tags[s.dataset.btag] = s.value; });
+    await api("/api/bench/mark", { platform: p.platform, post_id: p.post_id, tags, analysis: $("#bench-analysis").value });
+    toast("拆解已保存"); await reopenBench();
+  },
+  "bench-analyze": async () => { const p = S.benchOpen; await api("/api/bench/analyze", { posts: [{ platform: p.platform, post_id: p.post_id }] }); toast("大模型在拆解，好了会自动填进来"); await refresh(); },
+  "bench-analyze-all": async () => {
+    const posts = S.bench.hits.filter((p) => p.status === "new").slice(0, 10).map((p) => ({ platform: p.platform, post_id: p.post_id }));
+    await api("/api/bench/analyze", { posts }); toast(`大模型在拆解 ${posts.length} 条`); await refresh();
+  },
+  "bench-ignore": async () => { const p = S.benchOpen; await api("/api/bench/mark", { platform: p.platform, post_id: p.post_id, status: p.status === "ignored" ? "new" : "ignored" }); await reopenBench(); },
+  "bench-use": async () => {
+    const p = S.benchOpen;
+    const { id } = await api("/api/bench/to_content", { platform: p.platform, post_id: p.post_id });
+    S.contents = (await api("/api/contents")).contents; S.page = "create"; render();
+    openContent(S.contents.find((c) => c.id === id)); toast("已放进「创作」的选题阶段");
+  },
   "comments-fetch": async (el) => { await api("/api/comments/fetch", acc(el)); toast("正在抓评论…"); await refresh(); },
   "comments-process": async () => { const r = await api("/api/comments/process", {}); toast(`生成草稿 ${r.drafted} 条，排队发送 ${r.queued} 条`); await go("comments"); },
   "comments-send": async () => { if (!confirm("开始自动发送排队中的回复？会打开浏览器窗口，条与条之间会间隔几十秒。")) return;
@@ -704,7 +817,9 @@ const ACTIONS = {
   },
   "save-settings": async () => {
     await api("/api/settings", { auto_collect: $("#st-auto").checked, collect_hour: +$("#st-hour").value, max_posts: +$("#st-max").value, headless: $("#st-headless").checked,
-      chrome_path: $("#st-chrome").value, ai_base_url: $("#st-url").value, ai_model: $("#st-model").value, ai_api_key: $("#st-key").value });
+      chrome_path: $("#st-chrome").value, ai_base_url: $("#st-url").value, ai_model: $("#st-model").value, ai_api_key: $("#st-key").value,
+      tikhub_api_key: $("#st-th-key").value, tikhub_base_url: $("#st-th-url").value, bench_hit_ratio: +$("#st-th-ratio").value,
+      bench_pages: +$("#st-th-pages").value, bench_auto: $("#st-th-auto").checked });
     toast("设置已保存"); await refresh(); render();
   },
 };

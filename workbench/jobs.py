@@ -148,6 +148,16 @@ class Worker(threading.Thread):
             contents.save(con, {"id": c["id"], field: (c[field] or "") + sep + text.strip()})
             self.log(con, job_id, "已写进这条内容的" + ("备注" if field == "notes" else "脚本"))
             return True
+        if kind == "bench":
+            from . import benchmarks
+            ok, new = benchmarks.refresh(con, p.get("bench_id"), log=lambda m: self.log(con, job_id, m))
+            return ok > 0
+        if kind == "bench_analyze":
+            from . import benchmarks
+            for platform, post_id in p["posts"]:
+                benchmarks.analyze(con, platform, post_id)
+                self.log(con, job_id, f"已拆解 {post_id}")
+            return True
         if kind in ("comments", "comment_send"):
             action = "comments" if kind == "comments" else "send-comments"
             code = self.spawn(con, job_id, [sys.executable, "-m", "workbench", action, "--platform", p["platform"], "--account", p["account"]],
@@ -170,6 +180,9 @@ class Worker(threading.Thread):
         for a in db.rows(con, "SELECT platform, account FROM accounts WHERE status='ok' AND account<>?", config.DEMO_ACCOUNT):
             if (a["platform"], a["account"]) not in done:
                 enqueue(con, "collect", {"platform": a["platform"], "account": a["account"], "auto": True})
+        if s["bench_auto"] and s["tikhub_api_key"] and db.rows(con, "SELECT 1 FROM benchmarks WHERE enabled=1 LIMIT 1") \
+                and not db.rows(con, "SELECT 1 FROM jobs WHERE type='bench' AND created_at>=? LIMIT 1", midnight):
+            enqueue(con, "bench", {"auto": True})
 
     def run(self):
         con = db.connect()

@@ -59,7 +59,7 @@ def clean(title, n=24):
     return t[:n] + ("…" if len(t) > n else "")
 
 
-def summarize(data, plan=(), accepted=(), questions=()):
+def summarize(data, plan=(), accepted=(), questions=(), bench=None):
     """压缩成复盘摘要（也是发给大模型的内容）。"""
     names = data["platforms"]
     posts = []
@@ -72,19 +72,26 @@ def summarize(data, plan=(), accepted=(), questions=()):
                           "first_red": (p["first_red"] or {}).get("key"), "first_day_share": p["first_day_share"],
                           "rec_share": p["rec_share"], "social_share": p["social_share"], "intent_comments": p["intent"]})
     return {"days": data["days"], "profile_gaps": data["profile_gaps"], "checks": data["checks"],
+            "benchmark_hits": [{"platform": p["platform"], "account": p["bench_name"], "title": clean(p["title"], 40), "interactions": p["inter"],
+                                "times_account_median": round(p["ratio"], 1), "tags": p["tags"]} for p in (bench or {}).get("hits", [])[:8]],
             "platform_summary": {names[k]: v for k, v in data["summary"].items()}, "posts": posts,
             "matrix": data["matrix"], "last_plan_acceptance": list(accepted), "comment_questions": list(questions)[:10],
             "plan_candidates": [{k: c[k] for k in ("priority", "title", "tags", "change", "acceptance")} for c in plan]}
 
 
-def rule_report(data, plan=(), notes=(), accepted=(), questions=()):
+def rule_report(data, plan=(), notes=(), accepted=(), questions=(), bench=None):
     """不依赖大模型的规则版复盘。"""
     names = data["platforms"]
     days = data["days"]
     L = [f"# {'近 ' + str(days) + ' 天' if days else '全部数据'}复盘", ""]
     shown = [p for w in data["works"] for p in w["posts"]]
     if not shown:
-        return "\n".join(L + ["这段时间没有作品数据。先在「账号」页登录并采集一次数据。"])
+        L.append("这段时间没有自己的作品数据。先在「账号」页登录并采集一次数据。")
+        if bench and bench["hits"]:  # 刚起步还没数据时，对标爆款是最快的选题来源
+            L += ["", "## 对标信号", ""] + [f"- {names[p['platform']]}「{p['bench_name']}」：{clean(p['title'], 30)}，是该号中位数的 {p['ratio']:.1f} 倍"
+                                           for p in bench["hits"][:8]]
+            L.append("\n到「对标」页拆解这些爆款，拆解过的会进下周计划。")
+        return "\n".join(L)
 
     L += ["## 0 定位检查", ""]
     if data["profile_gaps"]:
@@ -168,6 +175,16 @@ def rule_report(data, plan=(), notes=(), accepted=(), questions=()):
         for q, n, _ in list(questions)[:5]:
             L.append(f"- {n} 条类似提问：{q[:40]}")
 
+    if bench and bench["hits"]:
+        L += ["", "## 7b 对标信号", ""]
+        for p in bench["hits"][:5]:
+            L.append(f"- {names[p['platform']]}「{p['bench_name']}」：{clean(p['title'], 30)}，互动 {fmt(p['inter'])}，"
+                     f"是该号中位数的 {p['ratio']:.1f} 倍" + (f"，结构 {' × '.join(v for v in (p['tags'].get('archetype'), p['tags'].get('hook_open'), p['tags'].get('hook_end')) if v)}" if p["tags"] else "，未拆解"))
+        st = bench["structure"]
+        if st["tagged"]:
+            top = lambda field: "、".join(f"{v}（{n}）" for v, n in st[field][:3]) or "—"
+            L.append(f"- 拆解过的 {st['tagged']} 条爆款里，原型最多的是 {top('archetype')}；开头钩 {top('hook_open')}；结尾钩 {top('hook_end')}。"
+                     "对标号验证过的结构，复刻的风险最低。")
     L += ["", "## 8 下一步创作计划", ""]
     for c in plan:
         t = c["tags"]
@@ -199,14 +216,18 @@ def create(con, days, use_ai):
     data = analytics.build(con, days)
     questions = planner.top_questions(con, days or 3650)
     plan, notes = planner.candidates(data, questions)
+    from . import benchmarks
+    bench_items, bench_notes = benchmarks.plan_candidates(con, days or 30)
+    plan, notes = plan + bench_items, notes + bench_notes
+    bench = benchmarks.load(con, days or 30)
     accepted = last_acceptance(con)
     if use_ai:
-        summary = summarize(data, plan, accepted, questions)
+        summary = summarize(data, plan, accepted, questions, bench)
         content = chat([{"role": "system", "content": SYSTEM_PROMPT + "\n\n" + method.dictionary_text()},
                         {"role": "user", "content": method.profile_text(method.load_profile()) + "\n\n"
                          + json.dumps(summary, ensure_ascii=False, default=str)}])
     else:
-        content = rule_report(data, plan, notes, accepted, questions)
+        content = rule_report(data, plan, notes, accepted, questions, bench)
     with con:
         cur = con.execute("INSERT INTO reviews (created_at, days, kind, content) VALUES (?,?,?,?)",
                           (int(time.time() * 1000), days or 0, "ai" if use_ai else "rule", content))

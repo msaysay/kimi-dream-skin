@@ -37,6 +37,16 @@ CREATE TABLE IF NOT EXISTS post_flags (platform TEXT, post_id TEXT, flag TEXT, n
 CREATE TABLE IF NOT EXISTS comments (platform TEXT, comment_id TEXT, account TEXT, post_id TEXT, post_title TEXT,
   nick TEXT, text TEXT, ctime INTEGER, fetched_at INTEGER, is_question INTEGER DEFAULT 0, state TEXT DEFAULT 'new',
   rule_id INTEGER, reply TEXT, replied_at INTEGER, error TEXT, PRIMARY KEY (platform, comment_id));
+-- 对标账号与它们的作品（TikHub 读取的公开数据）
+CREATE TABLE IF NOT EXISTS benchmarks (id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT, uid TEXT, name TEXT, avatar TEXT,
+  followers INTEGER, note TEXT DEFAULT '', grp TEXT DEFAULT '', enabled INTEGER DEFAULT 1, added_at INTEGER, last_fetch INTEGER,
+  last_error TEXT, UNIQUE (platform, uid));
+CREATE TABLE IF NOT EXISTS bench_posts (platform TEXT, post_id TEXT, bench_id INTEGER, title TEXT, url TEXT, cover TEXT,
+  post_time INTEGER, duration_sec REAL, kind TEXT, is_top INTEGER DEFAULT 0, first_seen INTEGER,
+  status TEXT DEFAULT 'new', tags TEXT DEFAULT '{{}}', analysis TEXT DEFAULT '', content_id INTEGER, PRIMARY KEY (platform, post_id));
+CREATE TABLE IF NOT EXISTS bench_snaps (platform TEXT, post_id TEXT, fetched_at INTEGER, likes INTEGER, comments INTEGER,
+  shares INTEGER, collects INTEGER, plays INTEGER, PRIMARY KEY (platform, post_id, fetched_at));
+CREATE TABLE IF NOT EXISTS api_calls (ts INTEGER, path TEXT, ok INTEGER, price REAL);
 CREATE TABLE IF NOT EXISTS comment_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, platforms TEXT,
   keywords TEXT, exclude TEXT DEFAULT '', templates TEXT DEFAULT '[]', use_ai INTEGER DEFAULT 0,
   auto_send INTEGER DEFAULT 0, daily_cap INTEGER DEFAULT 20, enabled INTEGER DEFAULT 1, is_intent INTEGER DEFAULT 0,
