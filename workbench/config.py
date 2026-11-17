@@ -28,6 +28,7 @@ DEFAULT_SETTINGS = {
     "ai_base_url": "https://api.moonshot.cn/v1",
     "ai_api_key": "",
     "ai_model": "",
+    "xhs_cover_ratio": "3:4",  # 小红书封面比例：3:4 / 1:1 / 4:3 / 9:16
     # 对标账号（TikHub）
     "tikhub_api_key": "",
     "tikhub_base_url": "https://api.tikhub.io",  # 国内网络可以换成 https://api.tikhub.dev

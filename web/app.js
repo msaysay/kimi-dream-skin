@@ -7,7 +7,8 @@ const css = (name) => getComputedStyle(document.documentElement).getPropertyValu
 const S = {
   page: "today", state: null, method: null, data: null, days: 30, reviews: [], contents: [], comments: null,
   openJob: null, jobLog: "", commentTab: "todo", editing: null, editRule: null, bench: null, benchDays: 30, benchCands: null, benchTab: "hits",
-  form: { kind: "video", files: "", cover: "", title: "", desc: "", tags: "", schedule: "", headless: false, targets: {}, drafts: {}, content_id: null },
+  form: { kind: "video", files: "", cover: "", cover_sec: "", cover_focus: [0.5, 0.4], cover_mode: "auto", title: "", desc: "", tags: "", schedule: "", headless: false, targets: {}, drafts: {}, content_id: null },
+  coverPreview: null,
 };
 
 async function api(path, body) {
@@ -572,7 +573,7 @@ function publishPage() {
     <label class="field"><span>${isNote ? "图片文件（每行一个完整路径）" : "视频文件（完整路径）"}</span>
       <div class="row"><div class="grow">${isNote ? `<textarea data-f="files" style="min-height:70px">${esc(f.files)}</textarea>` : `<input data-f="files" value="${esc(f.files)}" placeholder="例如 D:\\视频\\成片.mp4">`}</div>
       <button data-act="pick" data-kind="${isNote ? "image" : "video"}" data-many="${isNote ? 1 : ""}" data-to="files">选择文件</button></div></label>
-    ${isNote ? "" : `<label class="field"><span>封面（可选）</span><div class="row"><div class="grow"><input data-f="cover" value="${esc(f.cover)}"></div><button data-act="pick" data-kind="image" data-to="cover">选择图片</button></div></label>`}
+    ${isNote ? "" : coverSection(f)}
     <label class="field"><span>标题</span><input data-f="title" value="${esc(f.title)}" maxlength="100"></label>
     <label class="field"><span>${isNote ? "正文" : "简介"}</span><textarea data-f="desc">${esc(f.desc)}</textarea></label>
     <label class="field"><span>话题（用逗号或空格分开，不用写 #）</span><input data-f="tags" value="${esc(f.tags)}"></label>
@@ -585,6 +586,19 @@ function publishPage() {
     <p class="hint">发布时会依次打开各平台的发布页自动填写并提交，同一时间只跑一个。进度在下方和「任务」页查看。</p>
   </div></div>
   <div class="card"><h2>最近的发布</h2><div id="live-publish"></div></div>`;
+}
+const MODE_NAME = { crop: "裁剪", pad: "完整画面 + 模糊背景" };
+function coverSection(f) {
+  const P = S.coverPreview;
+  const preview = P ? `<div class="cover-prev"><div><div class="hint">原图 ${P.source.w}×${P.source.h}（${esc(P.origin)}）。<b>点一下画面里最重要的位置</b>，裁剪会以它为中心</div>
+      <div class="focus-wrap" data-act="cover-focus"><img src="${P.source.url}"><span class="focus-dot" style="left:${P.focus[0] * 100}%;top:${P.focus[1] * 100}%"></span></div></div>
+    <div class="cover-outs">${P.items.map((it) => `<div><img src="${it.url}" style="aspect-ratio:${it.w}/${it.h}"><div class="hint">${pfDot(it.platform)}${esc(it.name)} · ${esc(it.label)}<br>${it.w}×${it.h} · ${MODE_NAME[it.mode]}${it.mode === "crop" ? `，保留 ${Math.round(it.keep * 100)}% 画面` : ""}</div></div>`).join("")}</div></div>` : "";
+  return `<div class="field"><span>封面（可选）：一张原图，按每个平台的规格各生成一份，尺寸精确匹配</span>
+    <div class="row"><div class="grow"><input data-f="cover" value="${esc(f.cover)}" placeholder="封面图的完整路径"></div><button data-act="pick" data-kind="image" data-to="cover">选择图片</button></div>
+    <div class="row" style="margin-top:8px;white-space:nowrap"><span class="hint">没有封面图时，从视频第</span><input data-f="cover_sec" value="${esc(f.cover_sec)}" style="width:64px" placeholder="秒"><span class="hint">秒截一帧</span></div>
+    <div class="row" style="margin-top:8px"><select data-f="cover_mode" class="grow">${[["auto", "自动（裁掉太多就用模糊背景）"], ["crop", "总是裁剪"], ["pad", "总是完整画面 + 模糊背景"]].map(([v, t]) => `<option value="${v}" ${f.cover_mode === v ? "selected" : ""}>${t}</option>`).join("")}</select>
+      <button data-act="cover-preview" style="white-space:nowrap">预览各平台封面</button></div>${preview}
+    <p class="hint">抖音竖封面 3:4（1080×1440）；视频号个人主页卡片 3:4 和动态封面 4:3（1440×1080）；小红书默认 3:4，可在设置里改。不预览也可以，发布时会自动按这些规格生成。</p></div>`;
 }
 function jobsTable(list, empty) {
   if (!list.length) return `<div class="sub">${empty}</div>`;
@@ -663,6 +677,7 @@ function settingsPage() {
     <label class="field"><span>每天几点之后采集（0-23）</span><input type="number" id="st-hour" min="0" max="23" value="${s.collect_hour}"></label>
     <label class="field"><span>每个账号每次最多采集多少条作品</span><input type="number" id="st-max" min="1" max="100" value="${s.max_posts}"></label>
     <label class="field"><input type="checkbox" id="st-headless" ${s.headless ? "checked" : ""}>采集时不显示浏览器窗口（采集总失败时可以取消勾选，看看页面停在哪）</label>
+    <label class="field"><span>小红书封面比例</span><select id="st-xhs-ratio">${["3:4", "1:1", "4:3", "9:16"].map((r) => `<option ${r === s.xhs_cover_ratio ? "selected" : ""}>${r}</option>`).join("")}</select></label>
     <label class="field"><span>使用本机的 Chrome（可选，填 chrome.exe 的完整路径；留空用自带浏览器）</span><input id="st-chrome" value="${esc(s.chrome_path)}"></label>
   </div><div class="card"><h2>AI</h2>
     <p>出稿、AI 复盘、对标拆解都交给你正在用的 AI 助手（Claude Code、Codex、WorkBuddy），<b>不需要另外配模型</b>。点了这些按钮会排进「AI 待办」，在助手里说「${ASK}」即可。</p>
@@ -742,6 +757,13 @@ async function refresh() {
   S.state = await api("/api/state"); live();
   clearTimeout(pollTimer); pollTimer = setTimeout(poll, 1000);  // 刚发起了操作，尽快再查一次进度
 }
+async function coverPreview() {
+  const f = S.form;
+  const platforms = Object.keys(f.targets).filter((k) => f.targets[k]).map((k) => k.split("/")[0]);
+  S.coverPreview = await api("/api/cover/preview", { cover: f.cover, files: f.files.split("\n"), cover_sec: f.cover_sec, cover_focus: f.cover_focus, cover_mode: f.cover_mode,
+    platforms: platforms.length ? [...new Set(platforms)] : null });
+  render();
+}
 async function reloadMethod() { S.method = await api("/api/method"); }
 async function reopenBench() {
   S.bench = await api(`/api/bench?days=${S.benchDays}`);
@@ -784,8 +806,14 @@ const ACTIONS = {
     const targets = Object.keys(f.targets).filter((k) => f.targets[k]).map((k) => { const [platform, ...rest] = k.split("/"); return { platform, account: rest.join("/"), draft: !!f.drafts[k] }; });
     const names = targets.map((t) => `${pfName(t.platform)}「${t.account}」${t.draft ? "（存草稿）" : ""}`).join("、");
     if (targets.length && !confirm(`确认${f.schedule ? "定时 " + f.schedule.replace("T", " ") + " " : "立即"}发布到：${names}？`)) return;
-    await api("/api/publish", { kind: f.kind, files: f.files.split("\n"), cover: f.cover, title: f.title, desc: f.desc, tags: f.tags, schedule: f.schedule, headless: f.headless, targets, content_id: f.content_id });
+    await api("/api/publish", { kind: f.kind, files: f.files.split("\n"), cover: f.cover, cover_sec: f.cover_sec, cover_focus: f.cover_focus, cover_mode: f.cover_mode, title: f.title, desc: f.desc, tags: f.tags, schedule: f.schedule, headless: f.headless, targets, content_id: f.content_id });
     toast("已加入发布队列"); await refresh();
+  },
+  "cover-preview": async () => { await coverPreview(); },
+  "cover-focus": async (el, e) => {
+    const r = el.querySelector("img").getBoundingClientRect();
+    S.form.cover_focus = [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
+    await coverPreview();
   },
   "publish-unlink": () => { S.form.content_id = null; render(); },
   "job-log": async (el) => { const id = +el.dataset.id; S.openJob = S.openJob === id ? null : id; S.jobLog = S.openJob ? (await api("/api/jobs/" + id)).log : ""; live(); },
@@ -963,7 +991,7 @@ const ACTIONS = {
   },
   "save-settings": async () => {
     await api("/api/settings", { auto_collect: $("#st-auto").checked, collect_hour: +$("#st-hour").value, max_posts: +$("#st-max").value, headless: $("#st-headless").checked,
-      chrome_path: $("#st-chrome").value, ai_base_url: $("#st-url").value, ai_model: $("#st-model").value, ai_api_key: $("#st-key").value,
+      chrome_path: $("#st-chrome").value, xhs_cover_ratio: $("#st-xhs-ratio").value, ai_base_url: $("#st-url").value, ai_model: $("#st-model").value, ai_api_key: $("#st-key").value,
       tikhub_api_key: $("#st-th-key").value, tikhub_base_url: $("#st-th-url").value, bench_hit_ratio: +$("#st-th-ratio").value,
       bench_pages: +$("#st-th-pages").value, bench_auto: $("#st-th-auto").checked });
     toast("设置已保存"); await refresh(); render();
@@ -974,11 +1002,12 @@ document.addEventListener("click", (e) => {
   if (nav) return act(go)(nav.dataset.page);
   if (e.target.id === "drawer") return ACTIONS["close-drawer"]();
   const el = e.target.closest("[data-act]");
-  if (el && ACTIONS[el.dataset.act]) { if (el.tagName === "BUTTON") e.preventDefault(); act(ACTIONS[el.dataset.act])(el); }
+  if (el && ACTIONS[el.dataset.act]) { if (el.tagName === "BUTTON") e.preventDefault(); act(ACTIONS[el.dataset.act])(el, e); }
 });
 document.addEventListener("input", (e) => {
   const t = e.target;
   if (t.dataset.f) S.form[t.dataset.f] = t.type === "checkbox" ? t.checked : t.value;
+  if (["cover", "files", "cover_sec"].includes(t.dataset.f)) S.coverPreview = null;  // 来源变了，旧预览作废
   if (t.dataset.target) S.form.targets[t.dataset.target] = t.checked;
   if (t.dataset.draft) S.form.drafts[t.dataset.draft] = t.checked;
 });

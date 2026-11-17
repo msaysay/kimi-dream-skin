@@ -47,8 +47,10 @@ def publish_args(p):
         args += ["--images", *files, "--title", p["title"], "--note", p.get("desc") or ""]
     else:
         args += ["--file", files[0], "--title", p["title"], "--desc", p.get("desc") or ""]
-        if p.get("cover"):
-            args += ["--thumbnail", p["cover"]]
+        from .covers import FLAGS
+        for slot, path in (p.get("covers") or {}).items():  # 已按该平台规格生成好的封面
+            if slot in FLAGS and path:
+                args += [FLAGS[slot], path]
         if p.get("draft"):
             if not platform["draft"]:
                 raise ValueError(f"{platform['name']}不支持存草稿")

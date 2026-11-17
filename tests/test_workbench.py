@@ -257,7 +257,9 @@ def test_sau_cli_accepts_our_arguments(tmp_path):
     import subprocess, sys
     video, image = tmp_path / "v.mp4", tmp_path / "c.png"
     video.write_bytes(b"0"); image.write_bytes(b"0")
-    cases = [{"platform": pf, "kind": "video", "files": [str(video)], "cover": str(image), "title": "标题", "desc": "简介", "tags": "a,b",
+    from workbench import covers
+    cases = [{"platform": pf, "kind": "video", "files": [str(video)], "covers": {slot: str(image) for slot, *_ in covers.specs(pf)},
+              "title": "标题", "desc": "简介", "tags": "a,b",
               "schedule": "2030-01-01T20:30", "draft": pf == "channels"} for pf in config.PLATFORMS]
     cases += [{"platform": pf, "kind": "note", "files": [str(image), str(image)], "title": "标题", "desc": "正文", "tags": "a", "headless": True}
               for pf in ("douyin", "xhs")]
@@ -710,3 +712,88 @@ def test_publish_copy_comes_from_script(con):
     agent.submit(con, tid, GOOD_SCRIPT.replace("标题:", "简介: 三步讲清楚\n话题: AI 配音，不露脸做视频、#自媒体\n标题:"))
     c = contents.get(con, cid)
     assert c["pub_desc"] == "三步讲清楚" and c["pub_tags"] == "AI配音,不露脸做视频,自媒体"
+
+
+# ---------- 封面：按各平台规格生成 ----------
+def make_image(path, w, h):
+    import cv2, numpy as np
+    img = np.zeros((h, w, 3), np.uint8)
+    img[:, : w // 2] = (40, 40, 200)                      # 左半红、右半绿，用来判断裁到了哪边
+    img[:, w // 2:] = (40, 200, 40)
+    cv2.imencode(".png", img)[1].tofile(str(path))
+    return path
+
+
+def test_covers_match_each_platform_spec_exactly(con, tmp_path):
+    import cv2
+    from workbench import covers
+    src = make_image(tmp_path / "封面 原图.png", 1920, 1080)    # 16:9 横图，路径带中文和空格
+    r = covers.build(str(src), platforms=["douyin", "channels", "xhs"])
+    got = {(it["platform"], it["slot"]): it for it in r["items"]}
+    assert set(got) == {("douyin", "portrait"), ("channels", "portrait"), ("channels", "landscape"), ("xhs", "thumbnail")}
+    for it in r["items"]:
+        img = covers.read_image(it["path"])
+        assert (img.shape[1], img.shape[0]) == (it["w"], it["h"])
+    assert (got[("douyin", "portrait")]["w"], got[("douyin", "portrait")]["h"]) == (1080, 1440)
+    assert (got[("channels", "landscape")]["w"], got[("channels", "landscape")]["h"]) == (1440, 1080)
+    # 16:9 出 4:3 只裁掉两边一点（保留 75%）→ 裁剪；出 3:4 要丢掉一大半 → 自动改成模糊背景
+    assert got[("channels", "landscape")]["mode"] == "crop" and got[("channels", "landscape")]["keep"] == 0.75
+    assert got[("douyin", "portrait")]["mode"] == "pad"
+    # 焦点决定裁哪边：焦点在最左，裁出来全是左半边的颜色；在最右则相反
+    img = covers.read_image(src)
+    left = covers.render(img, 1080, 1440, (0.0, 0.5), "crop")[0]
+    right = covers.render(img, 1080, 1440, (1.0, 0.5), "crop")[0]
+    assert left[700, 540, 2] > 150 and right[700, 540, 1] > 150
+    assert covers.crop_box(1920, 1080, 1080, 1440, (0.0, 0.5)) == (0, 0, 810, 1080)
+    assert covers.crop_box(1920, 1080, 1080, 1440, (1.0, 0.5))[0] == 1920 - 810
+    # 小红书比例可以在设置里改
+    config.save_settings({"xhs_cover_ratio": "1:1"})
+    x = covers.build(str(src), platforms=["xhs"])["items"][0]
+    assert (x["w"], x["h"]) == (1080, 1080)
+    with pytest.raises(covers.CoverError, match="找不到"):
+        covers.build(str(tmp_path / "没有.png"))
+    with pytest.raises(covers.CoverError, match="没有封面来源"):
+        covers.build()
+
+
+def test_cover_from_video_frame(tmp_path):
+    import cv2, numpy as np
+    from workbench import covers
+    path = tmp_path / "clip.avi"
+    vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 10, (720, 1280))
+    if not vw.isOpened():
+        pytest.skip("这个环境写不了测试视频")
+    for i in range(30):
+        vw.write(np.full((1280, 720, 3), 30 if i < 15 else 220, np.uint8))   # 前 1.5 秒暗，之后亮
+    vw.release()
+    dark = covers.video_frame(str(path), 0.5)
+    bright = covers.video_frame(str(path), 2.5)
+    assert dark.shape[:2] == (1280, 720) and dark.mean() < 80 < bright.mean()
+    r = covers.build(video=str(path), sec=2.5, platforms=["channels"])
+    modes = {it["slot"]: it["mode"] for it in r["items"]}
+    assert modes == {"portrait": "crop", "landscape": "pad"}   # 竖屏画面出 3:4 裁剪即可，出 4:3 用模糊背景
+
+
+def test_publish_sends_each_platform_its_own_cover(api, con, tmp_path):
+    from workbench import covers
+    src = make_image(tmp_path / "c.png", 1600, 1200)
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"0")
+    for pf in ("douyin", "channels", "xhs"):
+        api("/api/accounts/add", {"platform": pf, "account": "主号"})
+    status, body = api("/api/publish", {"files": [str(video)], "title": "t", "cover": str(src), "cover_focus": [0.5, 0.5],
+                                        "targets": [{"platform": pf, "account": "主号"} for pf in ("douyin", "channels", "xhs")]})
+    assert status == 200
+    args = {}
+    for jid in body["jobs"]:
+        p = api(f"/api/jobs/{jid}")[1]["params"]
+        args[p["platform"]] = jobs.publish_args(p)
+    size = lambda a, flag: covers.read_image(a[a.index(flag) + 1]).shape[:2][::-1]
+    assert size(args["douyin"], "--thumbnail-portrait") == (1080, 1440) and "--thumbnail-landscape" not in args["douyin"]
+    assert size(args["channels"], "--thumbnail-portrait") == (1080, 1440) and size(args["channels"], "--thumbnail-landscape") == (1440, 1080)
+    assert size(args["xhs"], "--thumbnail") == (1080, 1440)
+    # 预览接口和图片地址
+    status, prev = api("/api/cover/preview", {"cover": str(src), "platforms": ["channels"]})
+    assert status == 200 and len(prev["items"]) == 2 and prev["items"][0]["url"].startswith("/api/cover/file?d=")
+    assert api("/api/cover/preview", {"cover": str(tmp_path / "x.png")})[0] == 400
+    assert api("/api/publish", {"files": [str(video)], "title": "t", "cover": str(video), "targets": [{"platform": "douyin", "account": "主号"}]})[0] == 400

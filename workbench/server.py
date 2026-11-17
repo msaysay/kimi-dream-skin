@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import agent, analytics, benchmarks, comments, config, contents, db, demo, guide, importer, jobs, method, planner, playbook, tikhub
+from . import agent, analytics, benchmarks, comments, config, covers, contents, db, demo, guide, importer, jobs, method, planner, playbook, tikhub
 
 ACCOUNT_RE = re.compile(r"^[\w一-鿿-]{1,30}$")
 
@@ -102,10 +102,19 @@ def api_post(con, worker, path, body):
         for f in files + ([cover] if cover else []):
             if not Path(f).is_file():
                 raise ApiError(f"找不到文件：{f}")
+        made = None
+        if (body.get("kind") or "video") == "video" and (cover or body.get("cover_sec") not in (None, "")):
+            try:  # 一张原图按每个平台的规格各生成一份
+                made = covers.build(cover or None, files[0] if files else None, body.get("cover_sec") if not cover else None,
+                                    body.get("cover_focus") or (0.5, 0.4), body.get("cover_mode") or "auto",
+                                    sorted({t.get("platform") for t in targets if t.get("platform") in config.PLATFORMS}))
+            except (covers.CoverError, ValueError, TypeError) as e:
+                raise ApiError(f"封面：{e}")
         queued = []
         for t in targets:
             require_account(con, t.get("platform"), t.get("account"))
-            p = {"platform": t["platform"], "account": t["account"], "kind": body.get("kind") or "video", "files": files, "cover": cover,
+            p = {"platform": t["platform"], "account": t["account"], "kind": body.get("kind") or "video", "files": files,
+                 "covers": covers.for_platform(made, t["platform"]) if made else {},
                  "title": (t.get("title") or body.get("title") or "").strip(), "desc": body.get("desc") or "", "tags": body.get("tags") or "",
                  "schedule": body.get("schedule") or "", "draft": bool(t.get("draft")), "headless": bool(body.get("headless")),
                  "content_id": int(body["content_id"]) if body.get("content_id") else None}
@@ -136,6 +145,19 @@ def api_post(con, worker, path, body):
     if path == "/api/demo":
         demo.load_demo(con) if body.get("action") == "load" else demo.clear_demo(con)
         return {"ok": True}
+    if path == "/api/cover/preview":
+        image = (body.get("cover") or "").strip().strip('"')
+        video = ((body.get("files") or [""])[0] or "").strip().strip('"')
+        try:
+            r = covers.build(image or None, video or None, body.get("cover_sec") if not image else None,
+                             body.get("cover_focus") or (0.5, 0.4), body.get("cover_mode") or "auto", body.get("platforms") or None)
+        except (covers.CoverError, ValueError, TypeError) as e:
+            raise ApiError(str(e))
+        for it in r["items"]:
+            it["url"] = f"/api/cover/file?d={r['dir']}&f={Path(it['path']).name}"
+            it["name"] = config.PLATFORMS[it["platform"]]["name"]
+        r["source"]["url"] = f"/api/cover/file?d={r['dir']}&f=source.jpg"
+        return r
     if path == "/api/pick":
         kind = body.get("kind") if body.get("kind") in ("image", "xlsx") else "video"
         try:
@@ -418,6 +440,18 @@ def make_handler(worker, port):
             if not self.guard():
                 return
             url = urlparse(self.path)
+            if url.path == "/api/cover/file":  # 生成的封面预览图
+                q = parse_qs(url.query)
+                d, name = (q.get("d") or [""])[0], (q.get("f") or [""])[0]
+                f = config.DATA / "covers" / d / name
+                if not re.fullmatch(r"[0-9a-f]{12}", d) or not re.fullmatch(r"[\w.]+\.jpg", name) or not f.is_file():
+                    return self.send_json({"error": "没有这张图"}, 404)
+                data = f.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                return self.wfile.write(data)
             if url.path.startswith("/api/"):
                 return self.handle_api(api_get, url.path, parse_qs(url.query))
             rel = "index.html" if url.path == "/" else url.path.lstrip("/")
