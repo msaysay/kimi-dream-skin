@@ -63,6 +63,9 @@ def import_workbook(con, path, account=""):
         import openpyxl
     except ImportError as e:
         raise ValueError("缺少 openpyxl：请重新运行「安装.cmd」") from e
+    from pathlib import Path
+    if not path or not Path(path).is_file():
+        raise ValueError(f"找不到这个文件：{path or '（没填）'}。请填完整路径（例如 D:\\数据\\工作台.xlsx），或点「选择文件」")
     wb = openpyxl.load_workbook(path, data_only=True)
     base = next((ws for ws in wb.worksheets if "底表" in ws.title), None)
     if base is None:

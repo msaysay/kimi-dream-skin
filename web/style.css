@@ -133,7 +133,26 @@ pre.log { background: var(--hover); border-radius: 8px; padding: 10px 12px; font
 .banner.ai { border-color: var(--accent); }
 .steps { margin: 0 0 12px; padding-left: 20px; } .steps li { margin-bottom: 6px; }
 details summary { cursor: pointer; margin: 6px 0 10px; }
+.nav-group { font-size: 12px; color: var(--muted); padding: 12px 10px 2px; }
+.side { overflow-y: auto; }
+.step { display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.step:last-child { border-bottom: 0; }
+.step .n { width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--axis); display: grid; place-items: center; font-size: 13px; color: var(--ink-2); }
+.step.first .n { background: var(--accent); border-color: var(--accent); color: #fff; }
+.step .t { font-weight: 600; } .step.urgent .t::after { content: " · 优先"; color: var(--bad); font-weight: 400; font-size: 12px; }
+.setup-item { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; }
+.setup-item .ok { color: var(--good); } .setup-item .todo { color: var(--muted); }
+.cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+.cal .d { border: 1px solid var(--line); border-radius: 8px; padding: 8px; min-height: 90px; background: var(--page); font-size: 13px; }
+.cal .d.today { border-color: var(--accent); }
+.cal .it { margin-top: 6px; cursor: pointer; } .cal .it:hover { color: var(--accent); }
+.trend { display: flex; gap: 18px; flex-wrap: wrap; }
+.trend .wk { text-align: center; font-size: 12px; color: var(--muted); }
+.trend .v { font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.lesson { display: grid; grid-template-columns: 70px 1fr auto; gap: 10px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.lesson:last-child { border-bottom: 0; }
 @media (max-width: 900px) {
+  .cal { grid-template-columns: repeat(2, 1fr); } .step { grid-template-columns: 28px 1fr; } .step > :last-child { grid-column: 2; }
   .app { flex-direction: column; } .side { width: auto; height: auto; position: static; flex-direction: row; flex-wrap: wrap; padding: 10px; }
   .brand, .side-foot { display: none; } main { padding: 16px; }
   .grid.k4, .grid.k3, .grid.k2 { grid-template-columns: 1fr 1fr; }

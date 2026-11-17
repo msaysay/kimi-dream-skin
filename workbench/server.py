@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import agent, analytics, benchmarks, comments, config, contents, db, demo, importer, jobs, method, planner, tikhub
+from . import agent, analytics, benchmarks, comments, config, contents, db, demo, guide, importer, jobs, method, planner, playbook, tikhub
 
 ACCOUNT_RE = re.compile(r"^[\w一-鿿-]{1,30}$")
 
@@ -205,6 +205,22 @@ def api_post(con, worker, path, body):
         if not ids:
             raise ApiError("没有要出稿的选题")
         return {"tasks": [request_ai(con, "script", i) for i in ids]}
+    # ---- 打法库与验收结论 ----
+    if path == "/api/playbook/note":
+        try:
+            playbook.set_note(con, body["key"], body.get("verdict"), body.get("note"))
+        except ValueError as e:
+            raise ApiError(str(e))
+        return {"ok": True}
+    if path == "/api/playbook/calibrate":
+        try:
+            playbook.apply_calibration(con, body.get("platform"))
+        except ValueError as e:
+            raise ApiError(str(e))
+        return {"ok": True}
+    if path == "/api/contents/conclude":
+        contents.save(con, {"id": int(body["id"]), "conclusion": (body.get("conclusion") or "").strip()[:500] or "已看过"})
+        return {"ok": True}
     # ---- 对标账号 ----
     if path == "/api/bench/resolve":
         if body.get("platform") not in config.PLATFORMS:
@@ -330,6 +346,10 @@ def api_get(con, worker, path, query):
         all_posts = db.rows(con, "SELECT COUNT(*) AS n FROM bench_posts")[0]["n"]
         return {**d, "usage": benchmarks.usage(con), "daily_cost": benchmarks.daily_cost(con), "post_total": all_posts,
                 "prices": tikhub.PRICES, "status_names": benchmarks.STATUS}
+    if path == "/api/today":
+        return guide.today_view(con)
+    if path == "/api/playbook":
+        return {"lessons": playbook.lessons(con), "calibration": playbook.calibration(con), "field_names": playbook.FIELD_NAMES}
     if path == "/api/agent":
         tasks = agent.pending(con)
         done = db.rows(con, "SELECT id, kind, note, done_at FROM agent_tasks WHERE status='done' ORDER BY done_at DESC LIMIT 5")

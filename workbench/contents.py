@@ -90,7 +90,8 @@ def pick_workflow(tags):
 
 
 FIELDS = ["title", "workflow", "stage", "priority", "motif", "archetype", "hook_open", "hook_mid", "hook_end", "duration_bin",
-          "presence", "rhythm", "cover_type", "basis", "acceptance", "week", "schedule_date", "script", "notes", "source", "verdict_from"]
+          "presence", "rhythm", "cover_type", "basis", "acceptance", "week", "schedule_date", "script", "notes", "source", "verdict_from",
+          "conclusion", "pub_desc", "pub_tags"]
 
 
 def now_ms():
@@ -116,7 +117,9 @@ def save(con, data):
         data["targets"] = json.dumps([t for t in data["targets"] if t.get("metric") in method.METRIC_NAMES], ensure_ascii=False)
     if "checklist" in data:
         data["checklist"] = json.dumps(data["checklist"], ensure_ascii=False)
-    cols = [f for f in FIELDS + ["targets", "checklist"] if f in data]
+    if "experiment" in data and not isinstance(data["experiment"], str):
+        data["experiment"] = json.dumps(data["experiment"], ensure_ascii=False) if data["experiment"] else None
+    cols = [f for f in FIELDS + ["targets", "checklist", "experiment"] if f in data]
     with con:
         if data.get("id"):
             con.execute(f"UPDATE contents SET {', '.join(c + '=?' for c in cols)}, updated_at=? WHERE id=?",
@@ -125,7 +128,7 @@ def save(con, data):
         if not (data.get("title") or "").strip():
             raise ValueError("选题不能为空")
         data.setdefault("stage", stage_names(wf)[0])
-        cols = [f for f in FIELDS + ["targets", "checklist"] if f in data]
+        cols = [f for f in FIELDS + ["targets", "checklist", "experiment"] if f in data]
         cur = con.execute(f"INSERT INTO contents ({', '.join(cols)}, created_at, updated_at) VALUES ({', '.join('?' * len(cols))}, ?, ?)",
                           [data[c] for c in cols] + [now_ms(), now_ms()])
         return cur.lastrowid
@@ -141,6 +144,7 @@ def get(con, content_id):
 def decode(c):
     c["targets"] = json.loads(c.get("targets") or "[]")
     c["checklist"] = json.loads(c.get("checklist") or "{}")
+    c["experiment"] = json.loads(c["experiment"]) if c.get("experiment") else None
     return c
 
 
@@ -303,7 +307,8 @@ def script_brief(con, content):
     if content.get("basis"):
         L += ["", "## 为什么做这条（数据依据）", content["basis"]]
     if content.get("acceptance") or content.get("targets"):
-        L += ["", "## 这条要达成的目标", "；".join(f"{method.METRIC_NAMES.get(t['metric'], t['metric'])} ≥ {t['value']}（{t.get('slot', 'D3')}）"
+        fmt = lambda t: f"{float(t['value']):,.0f}" if t["metric"] == "views" else f"{float(t['value']) * 100:.2f}%"
+        L += ["", "## 这条要达成的目标", "；".join(f"{method.METRIC_NAMES.get(t['metric'], t['metric'])} ≥ {fmt(t)}（{t.get('slot', 'D3')}）"
                                                 for t in content.get("targets") or []) + (f"。{content['acceptance']}" if content.get("acceptance") else "")]
     if content.get("source") == "benchmark" and content.get("notes"):
         L += ["", "## 对标爆款的拆解（借结构，不照抄选题）", content["notes"][:3000]]
@@ -328,6 +333,10 @@ def script_brief(con, content):
               method.dictionary_text()]
         if proven:
             L += ["已经验证过的结构（优先考虑）："] + [f"- {x}" for x in proven]
+    from . import playbook
+    pb = playbook.brief_text(con)
+    if pb:
+        L += ["", pb]
     arch = content.get("archetype")
     skel = method.SKELETONS.get(arch) if arch else None
     L += ["", "## 四段骨架", f"按原型「{arch}」：" if skel else "按你选定的原型（各原型的骨架如下）："]
@@ -340,7 +349,8 @@ def script_brief(con, content):
           "- 时长落在选定的时长档里；每 5–8 秒一个新信息点。",
           "", "## 输出格式（照抄这个结构，开头的 --- 块会被程序读取）",
           "```", "---", "母题: <字典里的值>", "原型: <字典里的值>", "开头钩: <字典里的值>", "中段留人: <字典里的值>", "结尾钩: <字典里的值>",
-          "时长档: <字典里的值>", "标题: 标题1 | 标题2 | 标题3 | 标题4 | 标题5", "---",
+          "时长档: <字典里的值>", "标题: 标题1 | 标题2 | 标题3 | 标题4 | 标题5",
+          "简介: <发布时的简介，60 字以内，写进搜索词>", "话题: 话题1, 话题2, 话题3（不带 #，3–5 个）", "---",
           f"## 0–3 秒 · 给理由", "…（时间码、旁白、画面）", "## 3–8 秒 · 给结构", "…", "## 8 秒至主体 · 给内容", "…", "## 最后 3 秒 · 给下一步", "…",
           "## 四句自检", "1. 给理由：… 2. 给结构：… 3. 给内容：… 4. 给下一步：…",
           "## 三个平台的结尾怎么改", *[f"- {config.PLATFORMS[k]['name']}：…（{v}）" for k, v in method.PLATFORM_ROLES.items()], "```"]

@@ -5,7 +5,7 @@ const PF = ["douyin", "xhs", "channels"];
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 const S = {
-  page: "dashboard", state: null, method: null, data: null, days: 30, reviews: [], contents: [], comments: null,
+  page: "today", state: null, method: null, data: null, days: 30, reviews: [], contents: [], comments: null,
   openJob: null, jobLog: "", commentTab: "todo", editing: null, editRule: null, bench: null, benchDays: 30, benchCands: null, benchTab: "hits",
   form: { kind: "video", files: "", cover: "", title: "", desc: "", tags: "", schedule: "", headless: false, targets: {}, drafts: {}, content_id: null },
 };
@@ -319,6 +319,10 @@ function contentDrawer(c) {
       ${c.id ? `<button data-act="content-publish">带着这条去发布</button>` : ""}</div></div>
     <div class="card"><h2>结构（发布前打标，只改一个变量）</h2><div class="grid k3" style="margin:0">${Object.keys(S.method.tags).map((f) => tagSelect(f, c[f], "data-c")).join("")}</div>
       ${c.archetype ? comboHint(c) : ""}</div>
+    ${r.results.length && ["达成", "部分达成", "未达成"].includes(r.overall) ? `<div class="card"><h2>验收结论 <span class="tag v-${ACCEPT_CLASS[r.overall] || ""}">${esc(r.overall)}</span></h2>
+      ${c.experiment ? `<p class="sub">这条的唯一改动：${esc(S.method.tags[c.experiment.field] ? S.method.tags[c.experiment.field].name : c.experiment.field)} → ${esc(c.experiment.to || "")}。结果会记进打法库。</p>` : ""}
+      <textarea id="conclusion" style="min-height:60px" placeholder="一句话：这次学到了什么（例如：结尾改成关注理由，关注率从 0.28% 到 0.9%，有效）">${esc(c.conclusion || "")}</textarea>
+      <div class="row" style="margin-top:8px"><button class="primary" data-act="content-conclude">${c.conclusion ? "更新结论" : "写进结论"}</button><button data-act="go" data-page="playbook">看打法库</button></div></div>` : ""}
     <div class="card"><h2>目标指标与验收</h2>
       ${targets.map((t, i) => `<div class="row" style="margin-bottom:8px"><select data-t="metric" data-ti="${i}" style="width:160px"><option value="">（不设）</option>
         ${["views", "finish_rate", "follow_rate", "share_rate", "comment_rate", "intent_rate"].map((m) => `<option value="${m}" ${m === t.metric ? "selected" : ""}>${metricName(m)}</option>`).join("")}</select>
@@ -408,6 +412,64 @@ function commentsPage() {
           <label class="field"><input type="checkbox" id="r-on" ${rule.enabled !== 0 ? "checked" : ""}>启用</label>
           <div class="row"><button class="primary" data-act="rule-save">保存规则</button>${rule.id ? `<button class="danger" data-act="rule-delete">删除</button>` : ""}<button data-act="rule-cancel">取消</button></div></div>` : ""}
       </div></div></div>`;
+}
+
+// ---------- 今天 ----------
+function todayPage() {
+  const T = S.today;
+  if (!T) return `<div class="card sub">加载中…</div>`;
+  const stepAttrs = (a) => a.page ? `data-act="go" data-page="${a.page}"` : a.content ? `data-act="${a.publish ? "open-publish" : "open-content"}" data-id="${a.content}"`
+    : `data-act="${a.act}" data-ids="${(a.ids || []).join(",")}"`;
+  const steps = T.steps.length ? T.steps.map((x, i) => `<div class="step ${i === 0 ? "first" : ""} ${x.urgent ? "urgent" : ""}"><div class="n">${i + 1}</div>
+      <div><div class="t">${esc(x.title)}</div><div class="sub">${esc(x.why)}</div></div>
+      <button class="${i === 0 ? "primary" : ""}" ${stepAttrs(x.action)}>${esc(x.action.label)}</button></div>`).join("")
+    : `<p class="sub" style="margin:0">这一轮的事都做完了。数据每天会自动采集，验收结果出来后这里会提醒你写结论。</p>`;
+  const setup = T.setup_done ? "" : `<div class="card"><h2>第一次用：先把这几件事准备好</h2>${T.setup.map((x) => `<div class="setup-item">
+      <span class="${x.done ? "ok" : "todo"}">${x.done ? "✓" : "○"}</span><div class="grow"><b>${esc(x.title)}</b>${x.optional ? ` <span class="hint">可选</span>` : ""}<div class="hint">${esc(x.why)}</div></div>
+      ${x.done ? "" : `<button class="small" data-act="go" data-page="${x.action.page}">${esc(x.action.label)}</button>`}</div>`).join("")}</div>`;
+  const today = new Date().toISOString().slice(0, 10);
+  const cal = `<div class="card"><h2>接下来 7 天的排期</h2><div class="cal">${T.calendar.map((d) => `<div class="d ${d.date === today ? "today" : ""}">
+      <div class="sub">周${d.weekday} ${d.date.slice(5)}</div>${d.items.map((it) => `<div class="it" data-act="open-content" data-id="${it.id}">${it.priority ? `<span class="tag pri-${it.priority}">${it.priority}</span> ` : ""}${esc(it.title.replace(/^【[^】]*】/, "").slice(0, 22))}
+      <div class="hint">${esc(it.stage)}${it.has_script ? "" : " · 未出稿"}</div></div>`).join("") || `<div class="hint" style="margin-top:6px">—</div>`}</div>`).join("")}</div></div>`;
+  const trendRows = Object.entries(T.trend).filter(([, s]) => s.length).map(([pf, s]) => {
+    const fmt = (v, m) => v == null ? "—" : m === "views" ? num(v) : (v * 100).toFixed(m === "follow_rate" ? 2 : 1) + "%";
+    const arrow = (m) => s.length > 1 && s[s.length - 1][m] != null && s[s.length - 2][m] != null ? (s[s.length - 1][m] > s[s.length - 2][m] ? `<span class="up">▲</span>` : s[s.length - 1][m] < s[s.length - 2][m] ? `<span class="down">▼</span>` : "") : "";
+    return `<div style="margin-bottom:10px"><div class="sub">${pfDot(pf)}${pfName(pf)} · 按发布周的中位数（同龄快照）</div><div class="trend">
+      ${["follow_rate", "finish_rate", "views"].map((m) => `<div><div class="hint">${metricName(m)} ${arrow(m)}</div><div class="row">${s.map((w) => `<div class="wk"><div class="v">${fmt(w[m], m)}</div>${w.week.slice(5)}</div>`).join("")}</div></div>`).join("")}</div></div>`;
+  }).join("");
+  const lessons = T.lessons.length ? T.lessons.map((L) => `<div class="row"><span class="tag v-${L.status === "有效" ? "good" : "bad"}">${L.status === "有效" ? "✓" : "✕"} ${L.status}</span><span>${esc(L.title)}</span><span class="hint">${esc(L.summary)}</span></div>`).join("")
+    : `<p class="hint" style="margin:0">还没有验证出结论的打法。每条选题验收之后，「改了什么 → 有没有用」会记在这里，下一轮计划和出稿会参考。</p>`;
+  return `<div class="head"><h1>今天</h1><span class="sub">本周 ${T.week} · 只看下一步</span></div>
+    <div class="card"><h2>下一步</h2>${steps}</div>${setup}${cal}
+    <div class="grid k2"><div class="card"><h2>数据在变好吗</h2>${trendRows || `<p class="hint" style="margin:0">有了两周以上的数据，这里会按周对比。</p>`}</div>
+      <div class="card"><h2>打法库 <span class="sub" style="font-weight:400">越用越准</span></h2>${lessons}<div style="margin-top:10px"><button class="small" data-act="go" data-page="playbook">看全部打法</button></div></div></div>`;
+}
+
+// ---------- 打法库 ----------
+function playbookPage() {
+  const P = S.playbook;
+  if (!P) return `<div class="card sub">加载中…</div>`;
+  const cls = { "有效": "good", "无效": "bad", "验证中": "" };
+  const list = (kind) => P.lessons.filter((L) => L.kind === kind);
+  const block = (L) => `<div class="lesson"><div><span class="tag v-${cls[L.status]}">${L.status}</span>${L.confirmed ? `<div class="hint">已人工确认</div>` : ""}</div>
+    <div><b>${esc(L.title)}</b><div class="sub">${esc(L.summary)}</div>
+      ${L.evidence && L.evidence.length ? L.evidence.slice(0, 4).map((e) => `<div class="hint">· ${esc((e.title || "").replace(/^【[^】]*】/, "").slice(0, 24))}${e.result ? "：<b>" + esc(e.result) + "</b>" : ""}${e.conclusion ? "。" + esc(e.conclusion) : ""}</div>`).join("") : ""}
+      <input class="lesson-note" data-key="${esc(L.key)}" value="${esc(L.note)}" placeholder="补一句为什么（可选），回车保存" style="margin-top:6px"></div>
+    <div style="white-space:nowrap"><button class="small" data-act="lesson-verdict" data-key="${esc(L.key)}" data-v="有效">确认有效</button>
+      <button class="small" data-act="lesson-verdict" data-key="${esc(L.key)}" data-v="无效">确认无效</button>
+      ${L.confirmed ? `<button class="small" data-act="lesson-verdict" data-key="${esc(L.key)}" data-v="">恢复自动</button>` : ""}</div></div>`;
+  const exp = list("实验"), st = list("结构");
+  const cal = P.calibration.map((c) => c.ready ? `<div style="margin-bottom:12px"><div class="row"><b>${pfDot(c.platform)}${pfName(c.platform)}</b><span class="sub grow">${c.n} 条作品</span>
+      <button class="small primary" data-act="calibrate" data-platform="${c.platform}">按建议更新阈值</button></div>
+      <table><thead><tr><th>指标</th><th>现在（优秀 / 良好 / 及格）</th><th>建议（P90 / P50 / P25）</th></tr></thead><tbody>${c.rows.map((r) => `<tr><td>${metricName(r.metric)}</td>
+      <td class="num-cell">${r.current.map((v) => fmtMetric(r.metric, v)).join(" / ")}</td><td class="num-cell">${r.suggested.map((v) => fmtMetric(r.metric, v)).join(" / ")}</td></tr>`).join("")}</tbody></table></div>`
+    : `<p class="hint">${pfDot(c.platform)}${pfName(c.platform)}：现在 ${c.n} 条，攒到 ${c.need} 条后按你自己的分位数给建议。</p>`).join("");
+  return `<div class="head"><h1>打法库</h1><span class="sub">每次验收都会更新：改了什么 → 有没有用。有效的会优先进计划和出稿，无效的会避开</span></div>
+    <div class="card"><h2>实验打法 <span class="sub" style="font-weight:400">计划里每条只改一个变量，验收结果累积在这里；做到 2 次以上才下结论</span></h2>
+      ${exp.length ? exp.map(block).join("") : `<p class="hint" style="margin:0">还没有验收过的计划选题。按计划出稿、发布，数据回来后这里会出现第一条。</p>`}</div>
+    <div class="card"><h2>结构打法 <span class="sub" style="font-weight:400">同一平台里某种结构至少 3 条作品后，关注率和平台中位数比</span></h2>
+      ${st.length ? st.map(block).join("") : `<p class="hint" style="margin:0">每个平台至少 5 条带标签的作品后开始统计。</p>`}</div>
+    <div class="card"><h2>阈值校准 <span class="sub" style="font-weight:400">方法论：起始阈值是假设，攒够样本后按自己的分位数重设</span></h2>${cal || `<p class="hint" style="margin:0">还没有作品数据。</p>`}</div>`;
 }
 
 // ---------- 对标 ----------
@@ -627,7 +689,7 @@ function settingsPage() {
 }
 
 // ---------- 渲染与轮询 ----------
-const PAGES = { dashboard, agent: agentPage, bench: benchPage, review: reviewPage, plan: planPage, create: createPage, comments: commentsPage, publish: publishPage, accounts: accountsPage, jobs: jobsPage, settings: settingsPage };
+const PAGES = { today: todayPage, playbook: playbookPage, dashboard, agent: agentPage, bench: benchPage, review: reviewPage, plan: planPage, create: createPage, comments: commentsPage, publish: publishPage, accounts: accountsPage, jobs: jobsPage, settings: settingsPage };
 function live() {
   const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
   set("live-publish", jobsTable(S.state.jobs.filter((j) => j.type === "publish").slice(0, 10), "还没有发布记录。"));
@@ -650,6 +712,8 @@ async function go(page) {
   if (page === "comments") S.comments = await api("/api/comments");
   if (page === "bench") S.bench = await api(`/api/bench?days=${S.benchDays}`);
   if (page === "agent") S.agent = await api("/api/agent");
+  if (page === "today") S.today = await api("/api/today");
+  if (page === "playbook") S.playbook = await api("/api/playbook");
   render();
 }
 let lastDone = null, pollTimer;
@@ -739,6 +803,32 @@ const ACTIONS = {
     if (!ids.length) return toast("本周没有还没出稿的选题");
     await api("/api/contents/ai", { ids }); toast(S.state.agent_api ? `${ids.length} 条已交给模型接口` : `${ids.length} 条已排进 AI 待办：在 AI 助手里说「${ASK}」`); await refresh(); await go("agent");
   },
+  "open-content": async (el) => {
+    S.contents = (await api("/api/contents")).contents;
+    const c = S.contents.find((x) => x.id === +el.dataset.id); if (c) openContent(c);
+  },
+  "open-publish": async (el) => {
+    S.contents = (await api("/api/contents")).contents;
+    const c = S.contents.find((x) => x.id === +el.dataset.id); if (!c) return;
+    Object.assign(S.form, { content_id: c.id, title: c.title.replace(/^【[^】]*】/, "").slice(0, 60), desc: c.pub_desc || "", tags: c.pub_tags || "" });
+    await go("publish");
+  },
+  "plan-and-review": async () => {
+    await api("/api/review", { days: 7 }); await api("/api/plan", { days: 14 });
+    toast("正在复盘并生成本周计划…"); await refresh(); setTimeout(() => go("today"), 2500);
+  },
+  "script-all": async (el) => {
+    const ids = (el.dataset.ids || "").split(",").filter(Boolean).map(Number);
+    await api("/api/contents/ai", { ids }); toast(S.state.agent_api ? `${ids.length} 条已交给模型接口` : `${ids.length} 条已排进 AI 待办：在 AI 助手里说「${ASK}」`);
+    await refresh(); await go("today");
+  },
+  "content-conclude": async () => {
+    await api("/api/contents/conclude", { id: S.editing.id, conclusion: $("#conclusion").value });
+    toast("结论已记下，打法库已更新"); S.contents = (await api("/api/contents")).contents; openContent(S.contents.find((x) => x.id === S.editing.id));
+  },
+  "lesson-verdict": async (el) => { await api("/api/playbook/note", { key: el.dataset.key, verdict: el.dataset.v }); await go("playbook"); },
+  calibrate: async (el) => { if (!confirm("按你自己作品的分位数更新这个平台的阈值？之后的评分和判定都会按新阈值算。")) return;
+    await api("/api/playbook/calibrate", { platform: el.dataset.platform }); await reloadMethod(); toast("阈值已更新"); await go("playbook"); },
   "copy-ask": async () => { try { await navigator.clipboard.writeText(ASK); toast("已复制，粘贴到 AI 助手里"); } catch { toast(ASK); } },
   "agent-copy": async (el) => {
     const { brief } = await api(`/api/agent/${el.dataset.id}/brief`);
@@ -775,7 +865,8 @@ const ACTIONS = {
   },
   "content-publish": async () => {
     const c = readContentForm(); await api("/api/contents/save", c);
-    Object.assign(S.form, { content_id: c.id, title: c.title.replace(/^【[^】]*】/, "").slice(0, 60) });
+    const full = S.contents.find((x) => x.id === c.id) || c;
+    Object.assign(S.form, { content_id: c.id, title: c.title.replace(/^【[^】]*】/, "").slice(0, 60), desc: full.pub_desc || S.form.desc, tags: full.pub_tags || S.form.tags });
     $("#drawer").hidden = true; S.editing = null; await go("publish");
   },
   "content-link": async () => { const [platform, ...rest] = $("#link-post").value.split("|");
@@ -900,9 +991,14 @@ document.addEventListener("change", act(async (e) => {
   }
   if (S.editing && t.closest("#drawer") && (t.dataset.c === "workflow" || t.dataset.c === "archetype")) openContent(readContentForm());
 }));
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") ACTIONS["close-drawer"](); });
+document.addEventListener("keydown", act(async (e) => {
+  if (e.key === "Escape") ACTIONS["close-drawer"]();
+  if (e.key === "Enter" && e.target.classList.contains("lesson-note")) {
+    await api("/api/playbook/note", { key: e.target.dataset.key, note: e.target.value }); toast("已保存");
+  }
+}));
 
 (async () => {
-  try { S.state = await api("/api/state"); await reloadMethod(); await go("dashboard"); } catch (e) { $("#main").innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
+  try { S.state = await api("/api/state"); await reloadMethod(); await go("today"); } catch (e) { $("#main").innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
   poll();
 })();

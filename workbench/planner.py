@@ -48,8 +48,9 @@ def best_post(work):
     return max(scored, key=lambda p: p["total"]) if scored else None
 
 
-def candidates(data, comment_questions=()):
-    """返回计划条目（还没写进数据库）。"""
+def candidates(data, comment_questions=(), prefs=None):
+    """返回计划条目（还没写进数据库）。prefs 来自打法库：{标签: (有效的值, 无效的值)}，用来挑结尾钩、避开验证无效的母题。"""
+    prefs = prefs or {}
     params = data["params"]
     out, notes = [], []
     seen_motifs = set()
@@ -58,7 +59,7 @@ def candidates(data, comment_questions=()):
         for p in flagged:
             out.append({"priority": "P2", "title": f"【待重测】{short(p['title'])}：确认公开后重发", "tags": dict(p["tags"]),
                         "basis": f"{config.PLATFORMS[p['platform']]['name']}这条采集时状态为「{p['flag']}」，数据不可采信，本轮不下结论",
-                        "change": "不改结构，只重新取证", "targets": [target("finish_rate", params["thresholds"][p["platform"]]["finish_rate"][1], "D1")],
+                        "change": "不改结构，只重新取证", "exp": None, "targets": [target("finish_rate", params["thresholds"][p["platform"]]["finish_rate"][1], "D1")],
                         "acceptance": "发布 2 小时内核对公开状态；D1 看完播率与推荐占比", "verdict_from": "待重测"})
         p = best_post(w)
         if p is None:
@@ -77,18 +78,26 @@ def candidates(data, comment_questions=()):
         v = p["verdict"]
         if v == "双强型":
             out.append({"priority": "P0", "title": f"【系列续集】{short(p['title'])} · 下一集", "tags": tags,
-                        "basis": base + "。结构已验证，加量复制", "change": "不改结构，只换内容（做成系列）",
+                        "basis": base + "。结构已验证，加量复制", "change": "不改结构，只换内容（做成系列）", "exp": {"field": "series", "from": None, "to": "系列续集"},
                         "targets": [target("follow_rate", max(th["follow_rate"][1], (m["follow_rate"] or 0) * 0.9)),
                                     target("share_rate", max(th["share_rate"][1], (m["share_rate"] or 0) * 0.8))],
                         "acceptance": "D3 关注率与分享率都不低于上一集的九成、八成即成立；第 1 集置顶或进合集", "verdict_from": v})
         elif v == "泛流量型":
             new_end = "资产给予" if tags.get("motif") in ("AI 工具实测", "AI 制作流程拆解") else method.COMBOS[tags["archetype"]][2]
-            if tags.get("hook_end") == new_end:
-                new_end = "关注理由" if new_end != "关注理由" else "系列预告"
+            good, bad = prefs.get("hook_end", ([], []))
+            proven = [v for v in good if v not in (tags.get("hook_end"), "无")]
+            if proven:  # 打法库里验证有效的结尾钩优先
+                new_end = proven[0]
+            for alt in (new_end, "资产给予", "关注理由", "系列预告", "行动指令"):
+                if alt not in bad and alt != tags.get("hook_end"):
+                    new_end = alt
+                    break
             t2 = dict(tags, hook_end=new_end)
             out.append({"priority": "P0", "title": f"【同结构续作】和「{short(p['title'])}」同类的下一个选题，结尾补承接", "tags": t2,
-                        "basis": base + f"。算法愿意给量，观众没留下：结尾钩「{tags.get('hook_end') or '无'}」",
+                        "basis": base + f"。算法愿意给量，观众没留下：结尾钩「{tags.get('hook_end') or '无'}」"
+                                 + (f"。「{new_end}」在打法库里验证有效" if new_end in prefs.get("hook_end", ([], []))[0] else ""),
                         "change": f"唯一改动：结尾钩 {tags.get('hook_end') or '无'} → {new_end}",
+                        "exp": {"field": "hook_end", "from": tags.get("hook_end") or "无", "to": new_end},
                         "targets": [target("follow_rate", th["follow_rate"][1]), target("finish_rate", max(th["finish_rate"][1], (m["finish_rate"] or 0) * 0.75))],
                         "acceptance": f"D3 关注率 ≥ {pct(th['follow_rate'][1])} 且完播不掉到原来的七成五以下；关注率翻倍以上即成立", "verdict_from": v})
         elif v == "垂直型":
@@ -96,6 +105,7 @@ def candidates(data, comment_questions=()):
             t2 = dict(tags, motif=new_motif)
             out.append({"priority": "P1", "title": f"【换壳扩曝光】把「{short(p['title'])}」的结构装进「{new_motif}」", "tags": t2,
                         "basis": base + "。内容对人有用，但入口太窄", "change": f"唯一改动：母题 {tags.get('motif')} → {new_motif}（原型和结尾钩不动）",
+                        "exp": {"field": "motif", "from": tags.get("motif"), "to": new_motif},
                         "targets": [target("views", th["views"][1]), target("follow_rate", max(th["follow_rate"][2], (m["follow_rate"] or 0) * 0.7))],
                         "acceptance": f"D3 播放 ≥ {th['views'][1]:.0f} 且关注率守在原来的七成以上", "verdict_from": v})
         elif v == "低效型":
@@ -103,14 +113,14 @@ def candidates(data, comment_questions=()):
     # 母题缺口：没做过的母题是「换壳扩曝光」最省力的入口
     used = {w["tags"].get("motif") for w in data["works"] if w["tags"]}
     for motif in method.MOTIFS:
-        if motif in used or not used:
+        if motif in used or not used or motif in prefs.get("motif", ([], []))[1]:
             continue
         arch = next(a for a, c in method.COMBOS.items() if motif in c[0])
         _, ho, he, _ = method.COMBOS[arch]
         th = next(iter(params["thresholds"].values()))
         out.append({"priority": "P2", "title": f"【母题试探】{motif}：{method.MOTIFS[motif]}",
                     "tags": {"motif": motif, "archetype": arch, "hook_open": ho, "hook_end": he, "duration_bin": "30–60s"},
-                    "basis": f"本期「{motif}」母题 0 条，是没开发的选题来源", "change": "新母题，沿用推荐组合",
+                    "basis": f"本期「{motif}」母题 0 条，是没开发的选题来源", "change": "新母题，沿用推荐组合", "exp": {"field": "motif", "from": None, "to": motif},
                     "targets": [target("follow_rate", th["follow_rate"][1])], "acceptance": "只看值不值得做第二条：关注率高于本期中位数才继续",
                     "verdict_from": "母题缺口"})
         break  # 一周只试一个新母题
@@ -118,7 +128,7 @@ def candidates(data, comment_questions=()):
         th = next(iter(params["thresholds"].values()))
         out.append({"priority": "P2", "title": f"【评论区答疑】{q[:30]}",
                     "tags": {"motif": motif or "AI 概念科普", "archetype": "答疑型", "hook_open": "身份代入", "hook_end": "系列预告", "duration_bin": "30–60s"},
-                    "basis": f"评论区有 {n} 条类似提问，需求已经出现，直接取材", "change": "新原型（答疑型），制作成本最低",
+                    "basis": f"评论区有 {n} 条类似提问，需求已经出现，直接取材", "change": "新原型（答疑型），制作成本最低", "exp": {"field": "archetype", "from": None, "to": "答疑型"},
                     "targets": [target("comment_rate", th["comment_rate"][1])], "acceptance": "评论率 ≥ 良好线；看是否带动前作的主页访问",
                     "verdict_from": "评论区提问"})
     # 每周最多 max_p0 条 P0，多出来的降到 P1
@@ -152,7 +162,10 @@ def top_questions(con, days=14):
 def generate(con, days=14, log=print):
     """生成本周计划并写进「内容」，已有同名条目就跳过。返回新建的内容编号。"""
     data = analytics.build(con, days)
-    items, notes = candidates(data, top_questions(con, days))
+    from . import playbook
+    full = analytics.build(con)
+    prefs = {f: playbook.preferred(con, f, full) for f in ("hook_end", "motif")}
+    items, notes = candidates(data, top_questions(con, days), prefs)
     from . import benchmarks
     bench_items, bench_notes = benchmarks.plan_candidates(con)
     items += bench_items
@@ -170,7 +183,7 @@ def generate(con, days=14, log=print):
         tags = {k: v for k, v in c["tags"].items() if k in method.TAG_FIELDS}
         cid = contents.save(con, dict(tags, title=c["title"], priority=c["priority"], basis=f"{c['basis']}。{c['change']}",
                                       targets=c["targets"], acceptance=c["acceptance"], week=week, source="plan",
-                                      verdict_from=c["verdict_from"], schedule_date=str(slots[min(i, len(slots) - 1)]),
+                                      verdict_from=c["verdict_from"], schedule_date=str(slots[min(i, len(slots) - 1)]), experiment=c.get("exp"),
                                       workflow=contents.pick_workflow(tags)))
         created.append(cid)
         if c.get("bench"):  # 对标爆款进了计划，就标成已复刻，下周不再重复推荐

@@ -152,6 +152,11 @@ def submit(con, task_id, text):
             raise ValueError("正文要按四段写，至少要有「0–3 秒」和「最后 3 秒」两段")
         titles = [x.strip() for x in meta.get("标题", "").split("|") if x.strip()]
         update = {"id": c["id"], "script": body}
+        if meta.get("简介"):
+            update["pub_desc"] = meta["简介"][:300]
+        if meta.get("话题"):
+            # 话题用逗号 / 顿号分开；话题本身不带空格（平台话题里没有空格）
+            update["pub_tags"] = ",".join(re.sub(r"\s+", "", t).lstrip("#") for t in re.split(r"[,，、]+", meta["话题"]) if t.strip())[:200]
         update.update({f: v for f, v in tags.items() if not c.get(f)})  # 已定的结构不让改
         if titles:
             update["notes"] = ((c.get("notes") or "") + "\n\n" if c.get("notes") else "") + "备选标题：\n" + "\n".join(f"- {x}" for x in titles)
@@ -163,7 +168,7 @@ def submit(con, task_id, text):
         if stages.index(c["stage"]) <= stages.index(target):  # 稿子写完了，推到下一阶段
             update["stage"] = stages[min(stages.index(target) + 1, len(stages) - 1)]
         contents.save(con, update)
-        note = f"稿子已写进「{c['title']}」" + (f"，进入「{update['stage']}」阶段" if update.get("stage") else "")
+        note = f"稿子已写进「{update.get('title') or c['title']}」" + (f"，进入「{update['stage']}」阶段" if update.get("stage") else "")
     elif t["kind"] == "review":
         from . import review
         rid = review.save(con, p.get("days"), "ai", text)

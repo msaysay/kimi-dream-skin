@@ -3,6 +3,7 @@
 登录和发布交给 social-auto-upload 的命令行；采集在单独的进程里跑，浏览器出问题不会拖垮工作台。
 """
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -38,7 +39,7 @@ def publish_args(p):
         raise ValueError("没有选择要发布的文件")
     if not (p.get("title") or "").strip():
         raise ValueError("标题不能为空")
-    tags = ",".join(t.strip().lstrip("#") for t in (p.get("tags") or "").replace("，", ",").replace(" ", ",").split(",") if t.strip())
+    tags = ",".join(t.strip().lstrip("#") for t in re.split(r"[,，、\s]+", p.get("tags") or "") if t.strip())
     args = []
     if p.get("kind") == "note":
         if not platform["note"]:

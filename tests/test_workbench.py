@@ -1,4 +1,5 @@
 import json
+import time
 import random
 import shutil
 import threading
@@ -618,3 +619,94 @@ def test_agent_api(api, con):
     status, body = api("/api/agent/submit", {"id": tid, "text": GOOD_SCRIPT})
     assert status == 200 and "稿子已写进" in body["note"]
     assert api("/api/review", {"days": 7, "ai": True})[1]["task"]
+
+
+# ---------- 越用越准：打法库、今天、阈值校准 ----------
+def add_experiment(con, title, field, to, follows, views=2000, days_ago=5):
+    """模拟一条按计划做的选题：发出去、关联、拿到 D3 快照。"""
+    from workbench import contents as C
+    cid = C.save(con, {"title": title, "source": "plan", "archetype": "故事型", "experiment": {"field": field, "from": "无", "to": to},
+                       "targets": [{"metric": "follow_rate", "value": 0.008, "slot": "D3"}]})
+    pid = f"exp{cid}"
+    t = int(time.time() * 1000) - days_ago * 86400000
+    with con:
+        con.execute("INSERT INTO posts (platform, post_id, account, title, post_time) VALUES ('channels', ?, '主号', ?, ?)", (pid, title, t))
+        con.execute("INSERT INTO snapshots (platform, post_id, fetched_at, views, new_fans, finish_rate) VALUES ('channels', ?, ?, ?, ?, 15)",
+                    (pid, t + 3 * 86400000, views, follows))
+    C.link(con, cid, "channels", pid)
+    return cid
+
+
+def test_playbook_learns_and_steers_next_plan(con, tmp_path):
+    from workbench import playbook
+    make_workbook(tmp_path / "wb.xlsx")
+    importer.import_workbook(con, str(tmp_path / "wb.xlsx"), "主号")
+    add_experiment(con, "实验一", "hook_end", "系列预告", follows=40)   # 2.0% ≥ 0.8% 达成
+    lesson = next(L for L in playbook.lessons(con) if L["key"] == "exp|hook_end|系列预告")
+    assert lesson["status"] == "验证中" and lesson["wins"] == 1      # 一次不下结论
+    add_experiment(con, "实验二", "hook_end", "系列预告", follows=30)
+    lesson = next(L for L in playbook.lessons(con) if L["key"] == "exp|hook_end|系列预告")
+    assert lesson["status"] == "有效" and lesson["title"] == "结尾钩 改成「系列预告」"
+    # 下一轮计划：泛流量型那条本来默认补「关注理由」，现在优先用验证有效的「系列预告」
+    data = analytics.build(con)
+    prefs = {f: playbook.preferred(con, f, data) for f in ("hook_end", "motif")}
+    flow = next(c for c in planner.candidates(data, (), prefs)[0] if c["verdict_from"] == "泛流量型")
+    assert flow["tags"]["hook_end"] == "系列预告" and "打法库里验证有效" in flow["basis"]
+    assert flow["exp"] == {"field": "hook_end", "from": "无", "to": "系列预告"}
+    # 人工否决之后就避开
+    playbook.set_note(con, "exp|hook_end|系列预告", "无效", "其实是题材好，不是结尾的功劳")
+    prefs = {f: playbook.preferred(con, f) for f in ("hook_end", "motif")}
+    flow = next(c for c in planner.candidates(analytics.build(con), (), prefs)[0] if c["verdict_from"] == "泛流量型")
+    assert flow["tags"]["hook_end"] != "系列预告"
+    L = next(L for L in playbook.lessons(con) if L["key"] == "exp|hook_end|系列预告")
+    assert L["status"] == "无效" and L["auto_status"] == "有效" and L["confirmed"] and "题材好" in L["note"]
+    # 出稿说明里带上打法库
+    cid = contents.save(con, {"title": "下一条"})
+    from workbench import agent
+    assert "打法库" in agent.brief(con, agent.create(con, "script", cid))
+
+
+def test_today_walks_the_loop(con, tmp_path):
+    from workbench import agent, guide
+    first = lambda: guide.next_steps(con)[0][0]
+    assert first()["kind"] == "setup" and "定位" in first()["title"]
+    method.save_profile({k: v.replace("（待确认）", "") for k, v in method.load_profile().items()})
+    assert first()["kind"] == "setup" and "数据" in first()["title"]
+    make_workbook(tmp_path / "wb.xlsx")
+    importer.import_workbook(con, str(tmp_path / "wb.xlsx"), "主号")
+    assert first()["kind"] == "plan"                                   # 没登录账号不挡路
+    planner.generate(con, days=0)
+    steps = guide.next_steps(con)[0]
+    script = next(s for s in steps if s["kind"] == "script")
+    assert script["action"]["ids"]
+    for i in script["action"]["ids"]:
+        agent.create(con, "script", i)
+    kinds = [s["kind"] for s in guide.next_steps(con)[0]]
+    assert "agent" in kinds and "script" not in kinds
+    tid = agent.pending(con)[0]["id"]
+    agent.submit(con, tid, GOOD_SCRIPT)
+    assert any(s["kind"] == "produce" for s in guide.next_steps(con)[0])
+    view = guide.today_view(con)
+    assert len(view["calendar"]) == 7 and view["trend"]["channels"]
+
+
+def test_calibration_and_trend(con):
+    from workbench import playbook
+    demo.load_demo(con)
+    cal = {c["platform"]: c for c in playbook.calibration(con)}
+    assert cal["douyin"]["ready"] and cal["douyin"]["n"] == 8
+    views = next(r for r in cal["douyin"]["rows"] if r["metric"] == "views")
+    assert views["suggested"][0] >= views["suggested"][1] >= views["suggested"][2]
+    playbook.apply_calibration(con, "douyin")
+    assert method.load_params()["thresholds"]["douyin"]["views"] == views["suggested"]
+    trend = playbook.weekly_trend(analytics.build(con))
+    assert all(len(s) >= 2 for s in trend.values())
+
+
+def test_publish_copy_comes_from_script(con):
+    from workbench import agent
+    cid = contents.save(con, {"title": "带发布文案的稿子"})
+    tid = agent.create(con, "script", cid)
+    agent.submit(con, tid, GOOD_SCRIPT.replace("标题:", "简介: 三步讲清楚\n话题: AI 配音，不露脸做视频、#自媒体\n标题:"))
+    c = contents.get(con, cid)
+    assert c["pub_desc"] == "三步讲清楚" and c["pub_tags"] == "AI配音,不露脸做视频,自媒体"

@@ -79,7 +79,7 @@ def summarize(data, plan=(), accepted=(), questions=(), bench=None):
             "plan_candidates": [{k: c[k] for k in ("priority", "title", "tags", "change", "acceptance")} for c in plan]}
 
 
-def rule_report(data, plan=(), notes=(), accepted=(), questions=(), bench=None):
+def rule_report(data, plan=(), notes=(), accepted=(), questions=(), bench=None, lessons=()):
     """不依赖大模型的规则版复盘。"""
     names = data["platforms"]
     days = data["days"]
@@ -185,6 +185,10 @@ def rule_report(data, plan=(), notes=(), accepted=(), questions=(), bench=None):
             top = lambda field: "、".join(f"{v}（{n}）" for v, n in st[field][:3]) or "—"
             L.append(f"- 拆解过的 {st['tagged']} 条爆款里，原型最多的是 {top('archetype')}；开头钩 {top('hook_open')}；结尾钩 {top('hook_end')}。"
                      "对标号验证过的结构，复刻的风险最低。")
+    settled = [x for x in lessons if x["status"] in ("有效", "无效")]
+    if settled:
+        L += ["", "## 7c 打法库（越用越准：验证过的打法会影响下周计划和出稿）", ""]
+        L += [f"- 【{x['status']}】{x['title']}：{x['summary']}" for x in settled[:8]]
     L += ["", "## 8 下一步创作计划", ""]
     for c in plan:
         t = c["tags"]
@@ -216,10 +220,12 @@ def gather(con, days):
     from . import benchmarks, planner
     data = analytics.build(con, days)
     questions = planner.top_questions(con, days or 3650)
-    plan, notes = planner.candidates(data, questions)
+    from . import playbook
+    prefs = {f: playbook.preferred(con, f) for f in ("hook_end", "motif")}
+    plan, notes = planner.candidates(data, questions, prefs)
     bench_items, bench_notes = benchmarks.plan_candidates(con, days or 30)
     return {"data": data, "plan": plan + bench_items, "notes": notes + bench_notes, "accepted": last_acceptance(con),
-            "questions": questions, "bench": benchmarks.load(con, days or 30)}
+            "questions": questions, "bench": benchmarks.load(con, days or 30), "lessons": playbook.lessons(con)}
 
 
 def ai_brief(g):
@@ -241,4 +247,4 @@ def create(con, days, use_ai=False):
     g = gather(con, days)
     if use_ai:
         return save(con, days, "ai", chat([{"role": "user", "content": ai_brief(g)}]))
-    return save(con, days, "rule", rule_report(g["data"], g["plan"], g["notes"], g["accepted"], g["questions"], g["bench"]))
+    return save(con, days, "rule", rule_report(g["data"], g["plan"], g["notes"], g["accepted"], g["questions"], g["bench"], g["lessons"]))

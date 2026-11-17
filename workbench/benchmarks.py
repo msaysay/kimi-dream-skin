@@ -194,7 +194,8 @@ def to_content(con, platform, post_id):
     cid = contents.save(con, dict(tags, title=f"【对标复刻】借「{title}」的结构做一条", priority="P1", basis=basis, source="benchmark",
                                   targets=[{"metric": "follow_rate", "value": th["follow_rate"][1], "slot": "D3"}],
                                   acceptance="D3 关注率达到良好线即成立；同时对比原爆款的结构是否在自己账号上同样有效",
-                                  notes=(p["analysis"] or ""), workflow=contents.pick_workflow(tags), verdict_from="对标爆款"))
+                                  notes=(p["analysis"] or ""), workflow=contents.pick_workflow(tags), verdict_from="对标爆款",
+                                  experiment={"field": "benchmark", "from": None, "to": tags.get("archetype")} if tags.get("archetype") else None))
     with con:
         con.execute("UPDATE bench_posts SET content_id=?, status='used' WHERE platform=? AND post_id=?", (cid, platform, post_id))
     return cid
@@ -216,6 +217,7 @@ def plan_candidates(con, days=30, limit=2):
         out.append({"priority": "P1", "title": f"【对标复刻】借「{short}」的结构",
                     "tags": dict(p["tags"]), "bench": (p["platform"], p["post_id"]),
                     "basis": f"对标「{p['bench_name']}」爆款，互动是该号中位数的 {p['ratio']:.1f} 倍", "change": "借对标验证过的结构，换成自己能兑现的选题",
+                    "exp": {"field": "benchmark", "from": None, "to": p["tags"].get("archetype")},
                     "targets": [{"metric": "follow_rate", "value": th["follow_rate"][1], "slot": "D3"}],
                     "acceptance": "D3 关注率达到良好线即成立", "verdict_from": "对标爆款"})
     return out, notes

@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS bench_posts (platform TEXT, post_id TEXT, bench_id IN
   status TEXT DEFAULT 'new', tags TEXT DEFAULT '{{}}', analysis TEXT DEFAULT '', content_id INTEGER, PRIMARY KEY (platform, post_id));
 CREATE TABLE IF NOT EXISTS bench_snaps (platform TEXT, post_id TEXT, fetched_at INTEGER, likes INTEGER, comments INTEGER,
   shares INTEGER, collects INTEGER, plays INTEGER, PRIMARY KEY (platform, post_id, fetched_at));
+-- 打法库：用户对自动总结出来的打法的确认 / 否决 / 补充
+CREATE TABLE IF NOT EXISTS lesson_notes (key TEXT PRIMARY KEY, verdict TEXT, note TEXT, updated_at INTEGER);
 CREATE TABLE IF NOT EXISTS api_calls (ts INTEGER, path TEXT, ok INTEGER, price REAL);
 -- AI 待办：交给 AI 助手（Claude Code / Codex / WorkBuddy）做的事
 CREATE TABLE IF NOT EXISTS agent_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, ref TEXT, params TEXT DEFAULT '{{}}',
@@ -65,7 +67,21 @@ def connect():
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript(SCHEMA)
+    migrate(con)
     return con
+
+
+# 老版本建的表缺的列：启动时补上，已有数据不动
+COLUMNS = {"contents": {"experiment": "TEXT", "conclusion": "TEXT", "pub_desc": "TEXT", "pub_tags": "TEXT"}}
+
+
+def migrate(con):
+    for table, cols in COLUMNS.items():
+        have = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+        for col, kind in cols.items():
+            if col not in have:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
+    con.commit()
 
 
 def rows(con, sql, *args):
