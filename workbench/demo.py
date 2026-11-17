@@ -9,21 +9,29 @@ from . import config, db, ingest
 
 WORKS = [
     # 标题, 时长(秒), 几天前发布, 开头吸引力, 中段留存, 互动意愿, 涨粉能力, 发布平台
-    ("三个动作改善圆肩驼背，每天五分钟", 48, 2, 1.25, 1.1, 1.2, 1.3, ("douyin", "xhs", "channels")),
-    ("一周备餐：五十块钱吃七天", 95, 5, 0.7, 1.0, 1.1, 0.9, ("douyin", "xhs", "channels")),
-    ("新手买相机最容易踩的四个坑", 132, 8, 1.0, 0.65, 0.9, 1.0, ("douyin", "xhs")),
-    ("出租屋改造：两百块换一面墙", 61, 11, 1.1, 1.05, 0.55, 0.8, ("douyin", "xhs", "channels")),
-    ("我为什么不再推荐这款网红锅", 77, 14, 1.4, 1.2, 1.5, 1.1, ("douyin", "xhs", "channels")),
-    ("周末一个人去爬山的完整路线", 154, 18, 0.9, 0.8, 1.0, 0.6, ("douyin", "channels")),
-    ("打工人午休十分钟拉伸跟练", 600, 21, 1.0, 0.9, 1.0, 1.2, ("douyin", "xhs", "channels")),
-    ("租房合同里一定要看的三行字", 52, 25, 1.15, 1.0, 1.3, 1.4, ("douyin", "xhs", "channels")),
-    ("用手机拍出干净画面的布光方法", 88, 28, 0.85, 1.1, 0.8, 1.0, ("xhs", "channels")),
+    ("用 AI 三分钟剪完一条口播，五步讲完", 48, 2, 1.25, 1.1, 1.2, 1.3, ("douyin", "xhs", "channels")),
+    ("一句提示词做出产品宣传片", 25, 5, 0.7, 1.0, 1.1, 0.9, ("douyin", "xhs", "channels")),
+    ("新手用 AI 做视频最容易踩的四个坑", 132, 8, 1.0, 0.65, 0.9, 1.0, ("douyin", "xhs")),
+    ("我把周报交给 AI，老板没看出来", 61, 11, 1.1, 1.05, 0.55, 0.8, ("douyin", "xhs", "channels")),
+    ("他被董事会赶走，三年后回来救了公司", 97, 14, 1.4, 1.2, 1.5, 1.1, ("douyin", "xhs", "channels")),
+    ("同一个脚本，三个 AI 配音谁更像人", 74, 18, 0.9, 0.8, 1.0, 0.6, ("douyin", "channels")),
+    ("不露脸做账号的完整流程", 58, 21, 1.0, 0.9, 1.0, 1.2, ("douyin", "xhs", "channels")),
+    ("「AI 味」到底是什么，三句话讲清", 42, 25, 1.15, 1.0, 1.3, 1.4, ("douyin", "xhs", "channels")),
+    ("我做的 50 个剪辑组件，真正常用的是这 5 个", 38, 28, 0.85, 1.1, 0.8, 1.0, ("xhs", "channels")),
+]
+# 示例作品的结构标签：母题, 原型, 开头钩, 结尾钩
+DEMO_TAGS = [
+    ("AI 制作流程拆解", "教程型", "反常识断言", "资产给予"), ("AI 工具实测", "演示型", "结果奇观", "无"),
+    ("AI 工具实测", "清单型", "结果奇观", "资产给予"), ("AI 与职场商业应用", "故事型", "身份代入", "无"),
+    ("AI 行业人物与公司故事", "故事型", "悬念提问", "无"), ("AI 工具实测", "对比型", "悬念提问", "行动指令"),
+    ("AI 制作流程拆解", "教程型", "利益承诺", "资产给予"), ("AI 概念科普", "观点论证型", "反常识断言", "关注理由"),
+    ("AI 工具实测", "清单型", "结果奇观", "资产给予"),
 ]
 # 各平台的体量和基础水平不同
 BASE = {"douyin": {"views": 18000, "hook": 0.62, "finish": 0.24, "click": 0.11},
         "xhs": {"views": 5200, "hook": 0.70, "finish": 0.30, "click": 0.14},
         "channels": {"views": 2600, "hook": 0.66, "finish": 0.27, "click": None}}
-TAGS = ["生活记录", "干货分享", "新手必看"]
+TAGS = ["AI工具", "AI视频", "自媒体"]
 
 
 def curve(duration, hook, mid):
@@ -143,6 +151,12 @@ def load_demo(con):
         for platform in config.PLATFORMS:
             con.execute("INSERT OR REPLACE INTO accounts (platform, account, status, last_collect) VALUES (?,?,?,?)",
                         (platform, config.DEMO_ACCOUNT, "demo", int(now * 1000)))
+    from . import contents
+    for i, (motif, arch, ho, he) in enumerate(DEMO_TAGS):
+        posts = [(pf, f"demo-{pf}-{i}") for pf in WORKS[i][-1]]
+        cid = contents.backfill(con, *posts[0], {"motif": motif, "archetype": arch, "hook_open": ho, "hook_end": he})
+        for pf, pid in posts[1:]:
+            contents.link(con, cid, pf, pid)
 
 
 def clear_demo(con):
@@ -150,4 +164,4 @@ def clear_demo(con):
         for platform in config.PLATFORMS:
             db.delete_account_data(con, platform, config.DEMO_ACCOUNT)
             shutil.rmtree(config.DATA / "raw" / platform / config.DEMO_ACCOUNT, ignore_errors=True)
-        con.execute("DELETE FROM reviews WHERE kind='demo'")
+        con.execute("DELETE FROM contents WHERE source='backfill' AND id NOT IN (SELECT content_id FROM content_posts)")

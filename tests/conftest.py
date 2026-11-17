@@ -17,5 +17,6 @@ def free_port():
 FAKE_PORT = free_port()
 os.environ["WORKBENCH_DATA"] = tempfile.mkdtemp(prefix="workbench-test-")
 os.environ["WORKBENCH_WAIT"] = "0.15"
+os.environ["WORKBENCH_HEADLESS_SEND"] = "1"
 for key in ("XHS", "DOUYIN", "CHANNELS"):
     os.environ[f"WORKBENCH_URL_{key}"] = f"http://127.0.0.1:{FAKE_PORT}"

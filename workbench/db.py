@@ -25,9 +25,25 @@ CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT
   log TEXT DEFAULT '', created_at INTEGER, started_at INTEGER, finished_at INTEGER);
 CREATE TABLE IF NOT EXISTS reviews (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER, days INTEGER, kind TEXT,
   content TEXT);
+-- 内容：一条选题从计划、创作、发布到验收的全过程；发出去之后关联到各平台的作品
+CREATE TABLE IF NOT EXISTS contents (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, workflow TEXT, stage TEXT,
+  priority TEXT, motif TEXT, archetype TEXT, hook_open TEXT, hook_mid TEXT, hook_end TEXT, duration_bin TEXT,
+  presence TEXT, rhythm TEXT, cover_type TEXT, basis TEXT, targets TEXT DEFAULT '[]', acceptance TEXT,
+  week TEXT, schedule_date TEXT, script TEXT DEFAULT '', notes TEXT DEFAULT '', checklist TEXT DEFAULT '{{}}',
+  source TEXT, verdict_from TEXT, created_at INTEGER, updated_at INTEGER, archived INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS content_posts (content_id INTEGER, platform TEXT, post_id TEXT, PRIMARY KEY (platform, post_id));
+-- 作品状态：仅自己可见、删除等异常，不进评分和结论，只进待重测
+CREATE TABLE IF NOT EXISTS post_flags (platform TEXT, post_id TEXT, flag TEXT, note TEXT, PRIMARY KEY (platform, post_id));
+CREATE TABLE IF NOT EXISTS comments (platform TEXT, comment_id TEXT, account TEXT, post_id TEXT, post_title TEXT,
+  nick TEXT, text TEXT, ctime INTEGER, fetched_at INTEGER, is_question INTEGER DEFAULT 0, state TEXT DEFAULT 'new',
+  rule_id INTEGER, reply TEXT, replied_at INTEGER, error TEXT, PRIMARY KEY (platform, comment_id));
+CREATE TABLE IF NOT EXISTS comment_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, platforms TEXT,
+  keywords TEXT, exclude TEXT DEFAULT '', templates TEXT DEFAULT '[]', use_ai INTEGER DEFAULT 0,
+  auto_send INTEGER DEFAULT 0, daily_cap INTEGER DEFAULT 20, enabled INTEGER DEFAULT 1, is_intent INTEGER DEFAULT 0,
+  created_at INTEGER);
 """
 
-POST_TABLES = ("posts", "snapshots", "retention", "traffic_source", "audience", "trend")
+POST_TABLES = ("posts", "snapshots", "retention", "traffic_source", "audience", "trend", "content_posts", "post_flags", "comments")
 
 
 def connect():

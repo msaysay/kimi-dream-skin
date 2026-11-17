@@ -9,6 +9,29 @@ from urllib.parse import parse_qs, urlparse
 
 PAGE = "<!doctype html><meta charset=utf-8><body><div id=app></div><script>%s</script>"
 GET = "const get = (u) => fetch(u).then((r) => r.json());"
+# 评论管理页：加载评论列表，每条评论有「回复」，点开后出现输入框和「发送」
+COMMENT_JS = """fetch(%s, {method: %s}).then((r) => r.json()).then((j) => {
+  const list = (j.comments || (j.data && j.data.comment) || []);
+  for (const c of list) {
+    const row = document.createElement('div'); row.className = 'item';
+    const text = document.createElement('p'); text.textContent = c.text || c.commentContent;
+    const btn = document.createElement('span'); btn.textContent = '回复';
+    btn.onclick = () => {
+      const box = document.createElement('textarea'); const send = document.createElement('button'); send.textContent = '发送';
+      send.onclick = () => fetch('/reply', {method: 'POST', body: JSON.stringify({id: c.cid || c.commentId, text: box.value})}).then(() => { box.remove(); send.remove(); });
+      row.append(box, send); box.focus();
+    };
+    row.append(text, btn); document.body.append(row);
+  }
+});"""
+REPLIES = []
+COMMENTS = {
+    "douyin": {"comments": [{"cid": "dc1", "text": "求 skill，怎么领", "user": {"nickname": "小王"}, "aweme_id": "demo-douyin-0", "create_time": 1763000000},
+                            {"cid": "dc2", "text": "第三步的组件在哪里下载？", "user": {"nickname": "阿杰"}, "aweme_id": "demo-douyin-0", "create_time": 1763000100}]},
+    "channels": {"data": {"objectId": "demo-channels-0", "comment": [
+        {"commentId": "cc1", "commentContent": "Skill！", "commentNickname": "Mia", "commentCreatetime": "1763000200"}]}},
+}
+
 PAGES = {
     "/statistics/data-analysis": GET + "get('/api/galaxy/creator/datacenter/note/analyze/list?type=0&page_size=10&page_num=1');",
     "/statistics/note-detail": GET + """const id = new URLSearchParams(location.search).get('noteId');
@@ -25,6 +48,8 @@ PAGES = {
           b.onclick = () => urls.forEach((u) => get(api + u + (u.includes('?') ? '&' : '?') + 'item_id=' + id));
           document.body.append(b);
         }""",
+    "/creator-micro/interaction/comment-management": COMMENT_JS % ("'/aweme/v1/creator/comment/list/?count=20'", "'GET'"),
+    "/platform/comment": COMMENT_JS % ("'/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/comment_list'", "'POST'"),
     "/platform/statistic/post": """const b = document.createElement('div'); b.textContent = '单篇视频';
         b.onclick = () => fetch('/micro/statistic/cgi-bin/mmfinderassistant-bin/statistic/post_list?_rid=abc123', {method: 'POST',
           headers: {'Content-Type': 'application/json', 'X-WECHAT-UIN': '42'},
@@ -65,6 +90,8 @@ def make_handler(raw, account):
                     return self.reply({"data": {"note_infos": load("xhs", "_list")["notes"]}})
                 key = url.path.split("/datacenter/note/")[1].replace("/", "_")
                 return self.reply(load("xhs", q["note_id"][0])[key])
+            if url.path.startswith("/aweme/v1/creator/comment/list"):
+                return self.reply(COMMENTS["douyin"])
             if url.path.endswith("creator/item/list"):
                 return self.reply({"items": load("douyin", "_list")["items"]})
             if "/janus/douyin/creator/" in url.path:
@@ -76,7 +103,13 @@ def make_handler(raw, account):
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-            name = urlparse(self.path).path.rsplit("/", 1)[1]
+            path = urlparse(self.path).path
+            if path == "/reply" and self.logged_in():
+                REPLIES.append(body)
+                return self.reply({"ok": True})
+            if path.endswith("comment/comment_list") and self.logged_in():
+                return self.reply(COMMENTS["channels"])
+            name = path.rsplit("/", 1)[1]
             # 真实后台会校验页面带的头和参数；这里要求采集器原样带回来
             if not self.logged_in() or self.headers.get("X-WECHAT-UIN") != "42" or "_rid=abc123" not in self.path or body.get("reqScene") != 7:
                 return self.reply({"errCode": 300334, "errMsg": "not login"})

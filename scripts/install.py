@@ -116,7 +116,7 @@ def main():
     env.setdefault("PIP_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple")
     env.setdefault("PLAYWRIGHT_DOWNLOAD_HOST", "https://npmmirror.com/mirrors/playwright")
     say("安装依赖（第一次需要几分钟）")
-    pip = [VENV_PY, "-m", "pip", "install", "--disable-pip-version-check", "-e", SAU]
+    pip = [VENV_PY, "-m", "pip", "install", "--disable-pip-version-check", "-e", SAU, "openpyxl"]  # openpyxl 用来导入工作台表格
     try:
         run(pip, env=env)
     except subprocess.CalledProcessError:
@@ -127,7 +127,7 @@ def main():
     if not skip_browser:
         say("下载自动化用的浏览器 Chromium")
         run([VENV_PY, "-m", "patchright", "install", "chromium"], env=env)
-    say("安装完成。双击「启动.cmd」打开工作台。")
+    say("安装完成。双击「启动.cmd」打开 NingLoop。")
     return 0
 
 

@@ -16,7 +16,8 @@ html, body { margin: 0; height: 100%; }
 body { background: var(--page); color: var(--ink); font: 14px/1.6 "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif; }
 .app { display: flex; min-height: 100%; }
 .side { width: 180px; flex: none; background: var(--surface); border-right: 1px solid var(--line); padding: 20px 12px; display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; height: 100vh; }
-.brand { font-weight: 700; font-size: 16px; padding: 0 10px 16px; }
+.brand { font-weight: 700; font-size: 17px; padding: 0 10px 16px; letter-spacing: .3px; }
+.brand span { display: block; font-weight: 400; font-size: 12px; color: var(--muted); letter-spacing: 0; }
 .side a { padding: 8px 10px; border-radius: 8px; color: var(--ink-2); cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
 .side a:hover { background: var(--hover); }
 .side a.active { background: var(--hover); color: var(--ink); font-weight: 600; }
@@ -103,6 +104,27 @@ pre.log { background: var(--hover); border-radius: 8px; padding: 10px 12px; font
 .target { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
 .target .hint { color: var(--muted); font-size: 12px; }
 .hint { color: var(--muted); font-size: 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.chip { font-size: 12px; padding: 0 7px; border-radius: 6px; background: var(--hover); color: var(--ink-2); white-space: nowrap; }
+.tag.v-good { border-color: var(--good); } .tag.v-warn { border-color: var(--warn); } .tag.v-info { border-color: var(--accent); } .tag.v-bad { border-color: var(--bad); }
+.tag.pri-P0 { border-color: var(--bad); font-weight: 600; } .tag.pri-P1 { border-color: var(--warn); } .tag.pri-P2 { border-color: var(--axis); }
+.lv { font-size: 13px; white-space: nowrap; }
+.lv-偏弱 { color: var(--bad); font-weight: 600; } .lv-优秀 { color: var(--good); } .lv-无数据 { color: var(--muted); }
+.stage.lv-偏弱 { border-color: var(--bad); } .stage.lv-优秀 { border-color: var(--good); } .stage.lv-无数据 { border-style: dashed; }
+.funnel { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin: 10px 0; font-size: 13px; }
+.score-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--page); }
+.scores { display: grid; grid-template-columns: repeat(4, minmax(0, 160px)); gap: 8px; margin-top: 8px; }
+.scores .big { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.warn-text { color: var(--bad); }
+.kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(170px, 1fr); gap: 10px; overflow-x: auto; padding-bottom: 6px; }
+.kanban .col { background: var(--page); border: 1px solid var(--line); border-radius: 10px; padding: 8px; min-height: 120px; }
+.kanban .col-h { font-size: 13px; font-weight: 600; margin-bottom: 8px; display: flex; justify-content: space-between; }
+.kcard { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; font-size: 13px; }
+.kcard:hover { border-color: var(--accent); }
+.comment { padding: 12px 14px; }
+.rule { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.rule-form { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
 @media (max-width: 900px) {
   .app { flex-direction: column; } .side { width: auto; height: auto; position: static; flex-direction: row; flex-wrap: wrap; padding: 10px; }
   .brand, .side-foot { display: none; } main { padding: 16px; }

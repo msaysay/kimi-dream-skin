@@ -3,7 +3,7 @@ import argparse
 import sys
 import time
 
-from . import collect, config, db, demo, ingest, review, server
+from . import collect, comments, config, contents, db, demo, ingest, review, server
 
 
 def collect_one(con, platform, account):
@@ -14,7 +14,8 @@ def collect_one(con, platform, account):
         with con:
             con.execute("UPDATE accounts SET status='ok', last_collect=?, last_error=NULL WHERE platform=? AND account=?",
                         (int(time.time() * 1000), platform, account))
-        print(f"{name} 采集完成：{count} 条作品，入库 {saved} 条")
+        linked = contents.auto_link(con)
+        print(f"{name} 采集完成：{count} 条作品，入库 {saved} 条" + (f"，关联回 {linked} 条计划内容" if linked else ""))
         return True
     except collect.NotLoggedIn as e:
         with con:
@@ -31,7 +32,7 @@ def main(argv=None):
     for stream in (sys.stdout, sys.stderr):  # Windows 终端默认不是 UTF-8
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(prog="workbench", description="创作者工作台")
+    parser = argparse.ArgumentParser(prog="workbench", description="NingLoop（宁环）创作闭环工作台")
     sub = parser.add_subparsers(dest="cmd")
     p = sub.add_parser("serve", help="启动工作台（默认）")
     p.add_argument("--port", type=int)
@@ -40,6 +41,10 @@ def main(argv=None):
     p.add_argument("--platform", choices=list(config.PLATFORMS))
     p.add_argument("--account")
     sub.add_parser("demo", help="载入示例数据")
+    for name, text in (("comments", "抓评论并按规则生成回复"), ("send-comments", "发送排队中的评论回复（实验性）")):
+        p = sub.add_parser(name, help=text)
+        p.add_argument("--platform", choices=list(config.PLATFORMS), required=True)
+        p.add_argument("--account", required=True)
     p = sub.add_parser("review", help="生成复盘并打印")
     p.add_argument("--days", type=int, default=7)
     p.add_argument("--ai", action="store_true")
@@ -62,6 +67,32 @@ def main(argv=None):
                 return 1
         results = [collect_one(con, *t) for t in targets]
         return 0 if all(results) else 1
+    if args.cmd == "comments":
+        comments.ensure_default_rule(con)
+        try:
+            items = comments.fetch(args.platform, args.account)
+        except Exception as e:
+            print(f"抓评论失败：{e}")
+            return 1
+        new = comments.upsert(con, args.platform, args.account, items)
+        drafted, queued = comments.process(con)
+        print(f"新评论 {new} 条；生成回复草稿 {drafted} 条，排队自动发送 {queued} 条")
+        return 0
+    if args.cmd == "send-comments":
+        todo = db.rows(con, "SELECT * FROM comments WHERE platform=? AND account=? AND state='queued' ORDER BY ctime LIMIT 20",
+                       args.platform, args.account)
+        if not todo:
+            print("没有待发送的回复")
+            return 0
+        try:
+            results = comments.send(args.platform, args.account, todo)
+        except Exception as e:
+            results = [(c["comment_id"], False, str(e)[:200]) for c in todo]
+            print(f"发送失败：{e}")
+        comments.mark_sent(con, args.platform, results)
+        ok = sum(1 for r in results if r[1])
+        print(f"成功 {ok} 条，失败 {len(results) - ok} 条（失败的已退回草稿，可以复制后手动回复）")
+        return 0 if ok == len(results) else 1
     if args.cmd == "demo":
         demo.load_demo(con)
         print("示例数据已载入")

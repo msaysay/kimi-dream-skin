@@ -1,132 +1,33 @@
-"""复盘：先按规则汇总出一份摘要，再（可选）交给大模型写成复盘报告。"""
+"""复盘：按《内容数据分析方法论》的六层结构出一份周复盘，再（可选）交给大模型写成报告。
+
+顺序固定：定位检查 → 数据校验 → 五段漏斗（找本周唯一要改的那一段）→ 单条判定 → 四个判断 → 结构矩阵 → 上期验收 → 评论区信号 → 下一步。
+"""
 import json
 import time
 import urllib.error
 import urllib.request
-from collections import Counter
 
-from . import analytics, config
-from .analytics import STAGES
+from . import analytics, config, method
 
-ADVICE = {s[0]: s[4] for s in STAGES}
-
-SYSTEM_PROMPT = """你是一位短视频运营复盘顾问。用户会给你一份 JSON，里面是他自己在抖音、小红书、视频号的账号近期数据。
-数据说明：
-- rel_* 是该指标相对这个账号自己平时中位数的倍数，1.2 表示比平时高 20%，null 表示数据不足无法比较。
-- weak_stage 是漏斗（点进来→留下来→看下去→看完→有反应→转化）里最先低于平时八成的那一步。
-- 比率类指标都是百分数。视频号的 exit2s_rate 实际是「快速划走率」，口径和另外两个平台不同。
-请用中文写一份复盘，Markdown 格式，包含：
-1. 一段话结论（这段时间整体怎么样，最值得注意的一件事）
-2. 做得好的内容及可复用的原因（引用具体作品和数字）
-3. 最需要改的 2-3 个问题，每个问题给出下一条视频可以直接照做的改法
-4. 三个平台之间的差异，以及各平台接下来的侧重点
-5. 下周的 3 条具体行动
-只根据给出的数据下结论。数据不足以支持的判断要明说「数据不足」，不要编造数字。"""
+SYSTEM_PROMPT = """你是短视频运营复盘顾问，严格按用户给的方法论执行，不自造标签、不改口径。
+规则：
+1. 三个平台的绝对量和比率不能相加、不能横向比数值，只能比结构（占比）和同平台内的排名。
+2. 比较只在同一快照档位内进行（D1/D3/D7）；cmp_slot 为「最新」的作品是非同龄数据，结论要打折扣。
+3. 流量力与转化力分开看；判定只用给出的五类（双强型 / 泛流量型 / 垂直型 / 低效型 / 过渡型）。
+4. 五段漏斗从 S1 往下读，第一个「偏弱」的段就是本周唯一要改的事；一周只改一个变量。
+5. 状态异常（flag 非空）的作品不下结论，只进待重测。
+6. 样本少于 3 条的分组只能当假设。数据不支持的判断要写「数据不足」，不许编数字。
+输出中文 Markdown，章节：一句话结论 / 本周唯一要改的那一段（附动作）/ 单条判定与动作 / 四个判断（流量集中与复利、结尾钩与转化、开头与完播、需要核对的数据）/ 下一步三条选题方向（每条写：母题×原型×开头钩×结尾钩×时长档、只改了哪个变量、目标指标、验收口径）。"""
 
 
-def pct(rel):
-    return None if rel is None else round((rel - 1) * 100)
-
-
-def summarize(dataset):
-    """把看板数据压缩成复盘用的摘要（也是发给大模型的内容）。"""
-    names = dataset["platforms"]
-    works = []
-    for w in dataset["works"]:
-        posts = []
-        for p in w["posts"]:
-            L = p["latest"]
-            posts.append({
-                "platform": names[p["platform"]], "account": p["account"], "views": L.get("views"),
-                "rel_views": p["rel"].get("views"), "finish_rate": L.get("finish_rate"), "rel_finish_rate": p["rel"].get("finish_rate"),
-                "exit2s_rate": L.get("exit2s_rate"), "cover_click_rate": L.get("cover_click_rate"),
-                "interaction_rate": p["derived"].get("interaction_rate"), "rel_interaction_rate": p["rel"].get("interaction_rate"),
-                "new_fans": L.get("new_fans"), "fans_per_k": p["derived"].get("fans_per_k"),
-                "weak_stage": (p.get("weak_stage") or {}).get("name"),
-                "top_source": p["sources"][0][0] if p["sources"] else None,
-            })
-        rels = [x["rel_views"] for x in posts if x["rel_views"]]
-        works.append({"title": w["title"], "date": time.strftime("%Y-%m-%d", time.localtime((w["first_post_time"] or 0) / 1000)),
-                      "duration_sec": w["duration_sec"], "total_views": w["total_views"], "total_new_fans": w["total_new_fans"],
-                      "best_platform": names.get(w["best_platform"]), "avg_rel_views": sum(rels) / len(rels) if rels else None,
-                      "posts": posts})
-    weak = {}
-    for w in dataset["works"]:
-        for p in w["posts"]:
-            c = weak.setdefault(names[p["platform"]], Counter())
-            c["总数"] += 1
-            if p.get("weak_stage"):
-                c[p["weak_stage"]["key"]] += 1
-    return {"days": dataset["days"], "totals": dataset["totals"],
-            "by_platform": {names[k]: v for k, v in dataset["by_platform"].items()},
-            "weak_stage_counts": {k: dict(v) for k, v in weak.items()},
-            "best_platform_counts": dict(Counter(w["best_platform"] for w in works if w["best_platform"])),
-            "works": works}
-
-
-def fmt(n):
-    if n is None:
-        return "—"
-    return f"{n / 10000:.1f} 万" if n >= 10000 else f"{n:.0f}"
-
-
-def describe(work):
-    parts = []
-    for p in work["posts"]:
-        rel = pct(p["rel_views"])
-        text = f"{p['platform']} {fmt(p['views'])} 播放"
-        if rel is not None:
-            text += f"（比平时{'高' if rel >= 0 else '低'} {abs(rel)}%）"
-        parts.append(text)
-    return f"**{work['title'] or '（无标题）'}**（{work['date']}）：" + "；".join(parts)
-
-
-def rule_report(summary):
-    """不依赖大模型的规则版复盘。"""
-    stage_name = {s[0]: s[1] for s in STAGES}
-    t, days = summary["totals"], summary["days"]
-    lines = [f"# {'近 ' + str(days) + ' 天' if days else '全部数据'}复盘", ""]
-    if not summary["works"]:
-        return "\n".join(lines + ["这段时间没有作品数据。先在「账号」页登录并采集一次数据。"])
-    lines += ["## 总览", "",
-              f"- 共 {t['works']} 个作品、{t['posts']} 条发布，总播放 {fmt(t['views'])}，互动 {fmt(t['interactions'])}，涨粉 {fmt(t['new_fans'])}。"]
-    for name, v in summary["by_platform"].items():
-        if v["posts"]:
-            lines.append(f"- {name}：{v['posts']} 条，播放 {fmt(v['views'])}，互动 {fmt(v['interactions'])}，涨粉 {fmt(v['new_fans'])}。")
-    ranked = sorted([w for w in summary["works"] if w["avg_rel_views"]], key=lambda w: -w["avg_rel_views"])
-    if ranked:
-        lines += ["", "## 表现最好的作品", ""] + [f"{i}. {describe(w)}" for i, w in enumerate(ranked[:3], 1)]
-        worst = [w for w in ranked[::-1][:3] if w["avg_rel_views"] < 1 and w not in ranked[:3]]
-        if worst:
-            lines += ["", "## 最需要回看的作品", ""]
-            for i, w in enumerate(worst, 1):
-                stuck = sorted({p["weak_stage"] for p in w["posts"] if p["weak_stage"]})
-                lines.append(f"{i}. {describe(w)}" + (f"。卡在：{'、'.join(stuck)}" if stuck else ""))
-    else:
-        lines += ["", "每个账号至少要有 3 条作品的数据，才能算出「和自己平时比」的相对表现。目前数据还不够。"]
-    common = []
-    for name, counts in summary["weak_stage_counts"].items():
-        total = counts.get("总数", 0)
-        for key, n in sorted(((k, v) for k, v in counts.items() if k != "总数"), key=lambda x: -x[1]):
-            if total >= 3 and n / total >= 0.4:
-                common.append(f"- {name}：{total} 条里有 {n} 条卡在「{stage_name[key]}」。{ADVICE[key]}")
-    if common:
-        lines += ["", "## 反复出现的问题", ""] + common
-    if summary["best_platform_counts"]:
-        lines += ["", "## 平台对比", "",
-                  "同一个作品发到多个平台时，相对各自平时水平表现最好的平台：" +
-                  "，".join(f"{k} {v} 次" for k, v in sorted(summary["best_platform_counts"].items(), key=lambda x: -x[1])) + "。"]
-    return "\n".join(lines)
-
-
-def ai_report(summary, settings=None):
-    """调用 OpenAI 兼容接口（Kimi、DeepSeek、通义等都支持）生成复盘报告。"""
+def chat(messages, settings=None, max_tokens=None):
+    """调用 OpenAI 兼容接口（Kimi、DeepSeek、通义等都支持）。"""
     s = settings or config.load_settings()
     if not (s["ai_api_key"] and s["ai_model"] and s["ai_base_url"]):
         raise RuntimeError("还没有配置大模型：请在「设置」页填写接口地址、密钥和模型名")
-    body = {"model": s["ai_model"], "messages": [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": json.dumps(summary, ensure_ascii=False)}]}
+    body = {"model": s["ai_model"], "messages": messages}
+    if max_tokens:
+        body["max_tokens"] = max_tokens
     req = urllib.request.Request(s["ai_base_url"].rstrip("/") + "/chat/completions", data=json.dumps(body).encode("utf-8"),
                                  headers={"Content-Type": "application/json", "Authorization": "Bearer " + s["ai_api_key"]})
     try:
@@ -142,9 +43,170 @@ def ai_report(summary, settings=None):
         raise RuntimeError(f"大模型返回的格式不对：{json.dumps(reply, ensure_ascii=False)[:300]}") from e
 
 
+def pct(x, d=2):
+    return "—" if x is None else f"{x * 100:.{d}f}%"
+
+
+def fmt(n):
+    if n is None:
+        return "—"
+    return f"{n / 10000:.1f} 万" if n >= 10000 else f"{n:,.0f}"
+
+
+def clean(title, n=24):
+    import re
+    t = re.sub(r"#\S+", "", title or "").strip() or "（无标题）"
+    return t[:n] + ("…" if len(t) > n else "")
+
+
+def summarize(data, plan=(), accepted=(), questions=()):
+    """压缩成复盘摘要（也是发给大模型的内容）。"""
+    names = data["platforms"]
+    posts = []
+    for w in data["works"]:
+        for p in w["posts"]:
+            posts.append({"title": clean(p["title"], 40), "platform": names[p["platform"]], "account": p["account"],
+                          "cmp_slot": p["cmp_slot"], "age_days": round(p["age_days"] or 0, 1), "flag": p["flag"],
+                          "tags": p["tags"], **{k: (round(v, 4) if isinstance(v, float) else v) for k, v in p["m"].items()},
+                          "flow": p["flow"], "conv": p["conv"], "total": p["total"], "verdict": p["verdict"],
+                          "first_red": (p["first_red"] or {}).get("key"), "first_day_share": p["first_day_share"],
+                          "rec_share": p["rec_share"], "social_share": p["social_share"], "intent_comments": p["intent"]})
+    return {"days": data["days"], "profile_gaps": data["profile_gaps"], "checks": data["checks"],
+            "platform_summary": {names[k]: v for k, v in data["summary"].items()}, "posts": posts,
+            "matrix": data["matrix"], "last_plan_acceptance": list(accepted), "comment_questions": list(questions)[:10],
+            "plan_candidates": [{k: c[k] for k in ("priority", "title", "tags", "change", "acceptance")} for c in plan]}
+
+
+def rule_report(data, plan=(), notes=(), accepted=(), questions=()):
+    """不依赖大模型的规则版复盘。"""
+    names = data["platforms"]
+    days = data["days"]
+    L = [f"# {'近 ' + str(days) + ' 天' if days else '全部数据'}复盘", ""]
+    shown = [p for w in data["works"] for p in w["posts"]]
+    if not shown:
+        return "\n".join(L + ["这段时间没有作品数据。先在「账号」页登录并采集一次数据。"])
+
+    L += ["## 0 定位检查", ""]
+    if data["profile_gaps"]:
+        L.append(f"- 定位与用户卡还有 {len(data['profile_gaps'])} 项没填或待确认：{'、'.join(data['profile_gaps'])}。"
+                 "定位不落纸，漏斗再准也只会优化已经拍出来的东西（「设置 → 定位与用户卡」）。")
+    else:
+        L.append("- 定位与用户卡已填完，选题先过三闸再进计划。")
+
+    L += ["", "## 1 数据校验（条数 / 合计 / 极值）", ""]
+    for pf, c in data["checks"].items():
+        L.append(f"- {names[pf]}：{c['count']} 条，合计播放 {fmt(c['views'])}、评论 {fmt(c['comments'])}、分享 {fmt(c['shares'])}、"
+                 f"关注 {fmt(c['follows'])}，单条最高 {fmt(c['max_views'])}。" + (f" ⚠ {'；'.join(c['issues'])}" if c["issues"] else " 对得上后台再往下看。"))
+    flagged = [p for p in shown if p["flag"]]
+    if flagged:
+        L.append("- 状态异常、不进结论（只进待重测）：" + "；".join(f"{clean(p['title'])}（{p['flag']}）" for p in flagged))
+    nonsame = [p for p in shown if p["cmp_slot"] == "最新" and not p["flag"]]
+    if nonsame:
+        L.append(f"- 有 {len(nonsame)} 条没有 {data['params']['compare_slot']} 快照，用的是最新值（非同龄），比较时打折扣。")
+
+    L += ["", "## 2 五段漏斗：本周唯一要改的那一段", ""]
+    for pf, s in data["summary"].items():
+        segs = "　".join(f"{x['key']} {x['name']} {x['level']}" for x in s["funnel"])
+        L.append(f"- {names[pf]}（{s['posts']} 条，中位数）：{segs}")
+        if s["first_red"]:
+            L.append(f"  - 最先掉队：**{s['first_red']['key']} {s['first_red']['name']}**。{s['first_red']['meaning']}。本周只改这一件事：{s['first_red']['action']}")
+        else:
+            L.append("  - S1–S4 没有段落低于及格线。保持结构，按计划做续作。")
+        if s["funnel"][4]["level"] == "无数据":
+            L.append("  - S5 转化没有数据：第 4 跳（关注 → 私域）还没布。结尾说「评论区打关键词领」，"
+                     "再在「评论」页开启自动回复规则，领取意向率才算得出来。")
+
+    L += ["", "## 3 单条判定（流量力 / 转化力分开算）", ""]
+    for p in sorted(shown, key=lambda p: -(p["total"] or 0)):
+        if p["flag"]:
+            continue
+        v = p["verdict"] or "数据不足"
+        act = method.VERDICTS.get(v, ("", ""))[0]
+        red = f"；最先掉队 {p['first_red']['key']} {p['first_red']['name']}" if p["first_red"] else ""
+        L.append(f"- {names[p['platform']]}「{clean(p['title'])}」：流量力 {p['flow']} / 转化力 {p['conv']} / 综合 {p['total']} → **{v}**{red}。{act}")
+
+    L += ["", "## 4 四个判断", ""]
+    for pf, s in data["summary"].items():
+        group = [p for p in shown if p["platform"] == pf and not p["flag"]]
+        top = max(group, key=lambda p: p["cmp"].get("views") or 0)
+        line = f"- {names[pf]} · 流量集中：最高一条「{clean(top['title'])}」占 {pct(s['top_share'], 1)}，中位播放 {fmt(s['median_views'])}"
+        if top["first_day_share"] is not None:
+            line += f"，首日占累计 {pct(top['first_day_share'], 1)}"
+        compounding = [p for p in group if p["d2_over_d1"] and p["d2_over_d1"] > 1]
+        line += "。" + (f"有复利（次日反超首日）：{'、'.join(clean(p['title'], 12) for p in compounding)}。" if compounding else "没有作品次日反超首日，播放是一次性的。")
+        L.append(line)
+        if s["hooked_n"] and s["unhooked_n"] and s["nohook_follow"]:
+            ratio = s["hook_follow"] / s["nohook_follow"] if s["nohook_follow"] else None
+            L.append(f"- {names[pf]} · 结尾钩与转化：有结尾钩的 {s['hooked_n']} 条合计关注率 {pct(s['hook_follow'])}，无钩的 {s['unhooked_n']} 条 {pct(s['nohook_follow'])}"
+                     + (f"，相差 {ratio:.1f} 倍" if ratio else "") + "。这是相关不是因果，但加结尾钩几乎不增加成本。")
+        finish = [(p["m"]["finish_rate"], p["m"]["avg_view_sec"], p) for p in group if p["m"]["finish_rate"] is not None]
+        if len(finish) >= 2:
+            best = max(finish, key=lambda x: x[0])
+            L.append(f"- {names[pf]} · 开头与完播：完播最高的是「{clean(best[2]['title'])}」{pct(best[0])}（平均播放 {best[1] or '—'} 秒）。"
+                     "完播率和平均播放时长不同步时，短板在开头而不在时长；要定位到秒需要留存曲线。")
+    if flagged:
+        L.append("- 需要核对的数据：" + "；".join(f"{clean(p['title'])}（{p['flag']}{'，' + p['flag_note'] if p['flag_note'] else ''}）" for p in flagged))
+
+    L += ["", "## 5 结构-表现矩阵（条数为 1 的只能当假设）", ""]
+    any_cell = False
+    for field, title in (("archetype", "按原型"), ("hook_end", "按结尾钩")):
+        for pf, cells in data["matrix"][field].items():
+            for value, c in sorted(cells.items(), key=lambda x: -(x[1]["follow_rate"] or 0)):
+                any_cell = True
+                L.append(f"- {names[pf]} · {title} · {value}：{c['n']} 条，平均播放 {fmt(c['avg_views'])}，完播 {pct(c['finish_rate'])}，"
+                         f"关注率 {pct(c['follow_rate'])}，分享率 {pct(c['share_rate'])}{'（假设）' if c['hypothesis'] else ''}")
+    if not any_cell:
+        L.append("- 作品还没有结构标签，矩阵算不出来。在「看板」里点作品给它补标签（以后在「创作」里发布前就打好）。")
+
+    if accepted:
+        L += ["", "## 6 上期计划验收", ""]
+        for a in accepted:
+            L.append(f"- 「{a['title']}」：{a['overall']}" + (f"（{a['detail']}）" if a.get("detail") else ""))
+
+    if questions:
+        L += ["", "## 7 评论区信号", ""]
+        for q, n, _ in list(questions)[:5]:
+            L.append(f"- {n} 条类似提问：{q[:40]}")
+
+    L += ["", "## 8 下一步创作计划", ""]
+    for c in plan:
+        t = c["tags"]
+        shape = " × ".join(x for x in (t.get("motif"), t.get("archetype"), t.get("hook_open"), t.get("hook_end"), t.get("duration_bin")) if x)
+        L.append(f"- **{c['priority']}** {c['title']}　{shape}。{c['change']}。验收：{c['acceptance']}")
+    for n in notes:
+        L.append(f"- {n}")
+    if plan:
+        L.append("\n点「计划」页的「生成本周计划」，这些选题会进入创作流程，发布后自动验收。")
+    return "\n".join(L)
+
+
+def last_acceptance(con):
+    from . import contents, planner
+    week = planner.week_label(time.time() - 7 * 86400)
+    items = [c for c in contents.list_all(con, True) if c["week"] == week and c["source"] == "plan"]
+    out = []
+    for c in contents.with_acceptance(con, items):
+        r = c["acceptance_result"]
+        detail = "；".join(f"{config.PLATFORMS[x['platform']]['name']} {method.METRIC_NAMES[x['metric']]} "
+                          f"{pct(x['value']) if x['metric'] != 'views' else fmt(x['value'])}（目标 {x['target']}）"
+                          for x in r["results"] if x["value"] is not None)
+        out.append({"title": c["title"], "overall": r["overall"], "detail": detail})
+    return out
+
+
 def create(con, days, use_ai):
-    summary = summarize(analytics.build(con, days))
-    content = ai_report(summary) if use_ai else rule_report(summary)
+    from . import planner
+    data = analytics.build(con, days)
+    questions = planner.top_questions(con, days or 3650)
+    plan, notes = planner.candidates(data, questions)
+    accepted = last_acceptance(con)
+    if use_ai:
+        summary = summarize(data, plan, accepted, questions)
+        content = chat([{"role": "system", "content": SYSTEM_PROMPT + "\n\n" + method.dictionary_text()},
+                        {"role": "user", "content": method.profile_text(method.load_profile()) + "\n\n"
+                         + json.dumps(summary, ensure_ascii=False, default=str)}])
+    else:
+        content = rule_report(data, plan, notes, accepted, questions)
     with con:
         cur = con.execute("INSERT INTO reviews (created_at, days, kind, content) VALUES (?,?,?,?)",
                           (int(time.time() * 1000), days or 0, "ai" if use_ai else "rule", content))

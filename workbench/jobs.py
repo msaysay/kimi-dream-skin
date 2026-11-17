@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 
-from . import config, db, review
+from . import config, contents, db, method, planner, review
 
 ENV = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
 
@@ -134,6 +134,25 @@ class Worker(threading.Thread):
             review_id = review.create(con, p.get("days") or None, bool(p.get("ai")))
             self.log(con, job_id, f"复盘已生成（编号 {review_id}）")
             return True
+        if kind == "plan":
+            created = planner.generate(con, p.get("days") or 14, bool(p.get("ai")), log=lambda m: self.log(con, job_id, m))
+            return created is not None
+        if kind == "refine":
+            planner.refine_titles(con, [int(i) for i in p["ids"]], log=lambda m: self.log(con, job_id, m))
+            return True
+        if kind == "ai_script":
+            c = contents.get(con, int(p["content_id"]))
+            text = review.chat([{"role": "user", "content": contents.ai_prompt(c, method.load_profile(), p.get("kind") or "script")}])
+            field = "notes" if p.get("kind") == "titles" else "script"
+            sep = "\n\n---\n" if c[field] else ""
+            contents.save(con, {"id": c["id"], field: (c[field] or "") + sep + text.strip()})
+            self.log(con, job_id, "已写进这条内容的" + ("备注" if field == "notes" else "脚本"))
+            return True
+        if kind in ("comments", "comment_send"):
+            action = "comments" if kind == "comments" else "send-comments"
+            code = self.spawn(con, job_id, [sys.executable, "-m", "workbench", action, "--platform", p["platform"], "--account", p["account"]],
+                              config.ROOT)
+            return code == 0
         raise RuntimeError(f"不认识的任务类型：{kind}")
 
     def auto_collect(self, con):

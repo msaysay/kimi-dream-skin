@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import analytics, config, db, demo, jobs
+from . import analytics, comments, config, contents, db, demo, importer, jobs, method, planner
 
 ACCOUNT_RE = re.compile(r"^[\w一-鿿-]{1,30}$")
 
@@ -17,7 +17,8 @@ import json, sys, tkinter as tk
 from tkinter import filedialog
 root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)
 kinds = {'video': [('视频', '*.mp4 *.mov *.mkv *.avi *.flv *.webm'), ('所有文件', '*.*')],
-         'image': [('图片', '*.jpg *.jpeg *.png *.webp'), ('所有文件', '*.*')]}[sys.argv[1]]
+         'image': [('图片', '*.jpg *.jpeg *.png *.webp'), ('所有文件', '*.*')],
+         'xlsx': [('Excel 表格', '*.xlsx'), ('所有文件', '*.*')]}[sys.argv[1]]
 if sys.argv[2] == 'many':
     files = list(filedialog.askopenfilenames(filetypes=kinds))
 else:
@@ -96,12 +97,16 @@ def api_post(con, worker, path, body):
             require_account(con, t.get("platform"), t.get("account"))
             p = {"platform": t["platform"], "account": t["account"], "kind": body.get("kind") or "video", "files": files, "cover": cover,
                  "title": (t.get("title") or body.get("title") or "").strip(), "desc": body.get("desc") or "", "tags": body.get("tags") or "",
-                 "schedule": body.get("schedule") or "", "draft": bool(t.get("draft")), "headless": bool(body.get("headless"))}
+                 "schedule": body.get("schedule") or "", "draft": bool(t.get("draft")), "headless": bool(body.get("headless")),
+                 "content_id": int(body["content_id"]) if body.get("content_id") else None}
             try:
                 jobs.publish_args(p)
             except ValueError as e:
                 raise ApiError(f"{config.PLATFORMS[t['platform']]['name']}：{e}")
             queued.append(p)
+        if body.get("content_id"):
+            with con:
+                con.execute("UPDATE contents SET stage='发布', updated_at=? WHERE id=?", (jobs.now_ms(), int(body["content_id"])))
         return {"jobs": [jobs.enqueue(con, "publish", p) for p in queued]}
     if path == "/api/review":
         return {"job": jobs.enqueue(con, "review", {"days": int(body.get("days") or 0), "ai": bool(body.get("ai"))})}
@@ -118,13 +123,114 @@ def api_post(con, worker, path, body):
         demo.load_demo(con) if body.get("action") == "load" else demo.clear_demo(con)
         return {"ok": True}
     if path == "/api/pick":
-        kind = "image" if body.get("kind") == "image" else "video"
+        kind = body.get("kind") if body.get("kind") in ("image", "xlsx") else "video"
         try:
             out = subprocess.run([sys.executable, "-c", PICK_SCRIPT, kind, "many" if body.get("many") else "one"],
                                  capture_output=True, text=True, encoding="utf-8", timeout=600)
             return {"files": json.loads(out.stdout.strip().splitlines()[-1])}
         except Exception:
             raise ApiError("打不开文件选择窗口，请直接把文件的完整路径粘贴到输入框里")
+    # ---- 定位卡、复盘参数、工作流 ----
+    if path == "/api/profile":
+        return method.save_profile(body)
+    if path == "/api/params":
+        return method.save_params(body)
+    if path == "/api/workflows":
+        contents.save_workflows_text(body)
+        return {"ok": True}
+    if path == "/api/import":
+        try:
+            return importer.import_workbook(con, (body.get("path") or "").strip().strip('"'), body.get("account") or "")
+        except (ValueError, FileNotFoundError) as e:
+            raise ApiError(str(e))
+    if path == "/api/posts/flag":
+        with con:
+            if body.get("flag"):
+                con.execute("INSERT OR REPLACE INTO post_flags VALUES (?,?,?,?)", (body["platform"], body["post_id"], body["flag"], body.get("note") or ""))
+            else:
+                con.execute("DELETE FROM post_flags WHERE platform=? AND post_id=?", (body["platform"], body["post_id"]))
+        return {"ok": True}
+    if path == "/api/posts/tags":
+        try:
+            return {"id": contents.backfill(con, body["platform"], body["post_id"], body.get("tags") or {})}
+        except ValueError as e:
+            raise ApiError(str(e))
+    # ---- 计划与内容 ----
+    if path == "/api/plan":
+        return {"job": jobs.enqueue(con, "plan", {"days": int(body.get("days") or 14), "ai": bool(body.get("ai"))})}
+    if path == "/api/plan/refine":
+        ids = [int(i) for i in body.get("ids") or []]
+        if not ids:
+            raise ApiError("没有要细化的选题")
+        return {"job": jobs.enqueue(con, "refine", {"ids": ids})}
+    if path == "/api/contents/save":
+        try:
+            return {"id": contents.save(con, body)}
+        except ValueError as e:
+            raise ApiError(str(e))
+    if path == "/api/contents/link":
+        contents.link(con, int(body["content_id"]), body["platform"], body["post_id"])
+        return {"ok": True}
+    if path == "/api/contents/unlink":
+        contents.unlink(con, body["platform"], body["post_id"])
+        return {"ok": True}
+    if path == "/api/contents/archive":
+        with con:
+            con.execute("UPDATE contents SET archived=? WHERE id=?", (int(bool(body.get("archived", True))), int(body["id"])))
+        return {"ok": True}
+    if path == "/api/contents/scaffold":
+        c = contents.get(con, int(body["id"]))
+        text = contents.scaffold(c, method.load_profile())
+        contents.save(con, {"id": c["id"], "script": text if not c["script"] else c["script"] + "\n\n---\n" + text})
+        return {"ok": True}
+    if path == "/api/contents/ai":
+        if not (config.load_settings()["ai_api_key"] and config.load_settings()["ai_model"]):
+            raise ApiError("还没有配置大模型：请在「设置」页填写")
+        return {"job": jobs.enqueue(con, "ai_script", {"content_id": int(body["id"]), "kind": body.get("kind") or "script"})}
+    # ---- 评论 ----
+    if path == "/api/comments/fetch":
+        require_account(con, body.get("platform"), body.get("account"))
+        if not config.cookie_file(body["platform"], body["account"]).exists():
+            raise ApiError("这个账号还没登录")
+        return {"job": jobs.enqueue(con, "comments", {"platform": body["platform"], "account": body["account"]})}
+    if path == "/api/comments/import":
+        if body.get("platform") not in config.PLATFORMS:
+            raise ApiError("请选择平台")
+        comments.ensure_default_rule(con)
+        post = db.rows(con, "SELECT account FROM posts WHERE platform=? AND post_id=?", body["platform"], body.get("post_id") or "")
+        new = comments.import_text(con, body["platform"], post[0]["account"] if post else "", body.get("post_id") or "", body.get("text") or "")
+        drafted, _ = comments.process(con)
+        return {"new": new, "drafted": drafted}
+    if path == "/api/comments/process":
+        comments.ensure_default_rule(con)
+        with con:
+            con.execute("UPDATE comments SET state='new', reply=NULL, rule_id=NULL WHERE state='draft'")
+        drafted, queued = comments.process(con)
+        return {"drafted": drafted, "queued": queued}
+    if path == "/api/comments/update":
+        state = body.get("state")
+        if state not in ("draft", "queued", "replied", "ignored", "new"):
+            raise ApiError("状态不对")
+        if state == "queued" and body["platform"] not in comments.AUTO_SEND_PLATFORMS:
+            raise ApiError("小红书不自动发送，请复制回复后手动发")
+        with con:
+            con.execute("UPDATE comments SET state=?, reply=COALESCE(?, reply), replied_at=CASE WHEN ?='replied' THEN ? ELSE replied_at END "
+                        "WHERE platform=? AND comment_id=?", (state, body.get("reply"), state, jobs.now_ms(), body["platform"], body["comment_id"]))
+        return {"ok": True}
+    if path == "/api/comments/send":
+        targets = db.rows(con, "SELECT DISTINCT platform, account FROM comments WHERE state='queued' AND account<>''")
+        if not targets:
+            raise ApiError("没有排队待发送的回复")
+        return {"jobs": [jobs.enqueue(con, "comment_send", t) for t in targets]}
+    if path == "/api/rules/save":
+        try:
+            return {"id": comments.save_rule(con, body)}
+        except ValueError as e:
+            raise ApiError(str(e))
+    if path == "/api/rules/delete":
+        with con:
+            con.execute("DELETE FROM comment_rules WHERE id=?", (int(body["id"]),))
+        return {"ok": True}
     m = re.fullmatch(r"/api/jobs/(\d+)/cancel", path)
     if m:
         job_id = int(m.group(1))
@@ -141,6 +247,20 @@ def api_get(con, worker, path, query):
     if path == "/api/data":
         days = int((query.get("days") or ["0"])[0])
         return analytics.build(con, days or None)
+    if path == "/api/method":
+        return {"tags": {k: {"name": v[0], "values": v[1]} for k, v in method.TAG_FIELDS.items()},
+                "motifs": method.MOTIFS, "archetypes": method.ARCHETYPES, "hooks_open": method.HOOKS_OPEN, "hooks_mid": method.HOOKS_MID,
+                "hooks_end": method.HOOKS_END, "combos": method.COMBOS, "skeletons": method.SKELETONS, "segments": method.SEGMENTS,
+                "verdicts": method.VERDICTS, "jumps": method.JUMPS, "roles": method.PLATFORM_ROLES, "metric_names": method.METRIC_NAMES,
+                "profile_fields": method.PROFILE_FIELDS, "profile": method.load_profile(), "params": method.load_params(),
+                "workflows": contents.load_workflows(), "workflows_text": contents.workflows_text(), "week": planner.week_label()}
+    if path == "/api/contents":
+        return {"contents": contents.with_acceptance(con, contents.list_all(con, bool(query.get("all"))))}
+    if path == "/api/comments":
+        comments.ensure_default_rule(con)
+        out = db.rows(con, "SELECT * FROM comments ORDER BY COALESCE(ctime, fetched_at) DESC LIMIT 500")
+        return {"comments": out, "rules": comments.list_rules(con), "questions": planner.top_questions(con, 30)[:10],
+                "auto_send_platforms": comments.AUTO_SEND_PLATFORMS}
     if path == "/api/reviews":
         return {"reviews": db.rows(con, "SELECT * FROM reviews ORDER BY id DESC LIMIT 30")}
     m = re.fullmatch(r"/api/jobs/(\d+)", path)
@@ -225,7 +345,7 @@ def serve(port=None, open_browser=True):
     worker.start()
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(worker, port))
     url = f"http://127.0.0.1:{port}"
-    print(f"创作者工作台已启动：{url}\n关闭这个窗口就会停止工作台。")
+    print(f"NingLoop（宁环）已启动：{url}\n关闭这个窗口就会停止工作台。")
     if open_browser:
         import webbrowser
         webbrowser.open(url)
