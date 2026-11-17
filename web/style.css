@@ -130,6 +130,9 @@ pre.log { background: var(--hover); border-radius: 8px; padding: 10px 12px; font
 .cover { width: 120px; max-height: 180px; object-fit: cover; border-radius: 8px; margin-right: 14px; }
 .bar-row { display: grid; grid-template-columns: 1fr 80px 24px; gap: 6px; align-items: center; font-size: 13px; margin: 4px 0; }
 .bar { height: 6px; border-radius: 3px; background: var(--accent); display: block; }
+.banner.ai { border-color: var(--accent); }
+.steps { margin: 0 0 12px; padding-left: 20px; } .steps li { margin-bottom: 6px; }
+details summary { cursor: pointer; margin: 6px 0 10px; }
 @media (max-width: 900px) {
   .app { flex-direction: column; } .side { width: auto; height: auto; position: static; flex-direction: row; flex-wrap: wrap; padding: 10px; }
   .brand, .side-foot { display: none; } main { padding: 16px; }

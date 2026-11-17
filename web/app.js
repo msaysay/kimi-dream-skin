@@ -59,7 +59,18 @@ function jobTitle(j) {
   if (j.type === "review") return `生成${p.ai ? " AI " : "规则"}复盘`;
   return `${JOB_NAME[j.type] || j.type} ${who}`;
 }
-const aiReady = () => S.state.settings.ai_api_key_set && S.state.settings.ai_model;
+// AI 的活儿交给你正在用的 AI 助手（Claude Code / Codex / WorkBuddy）：按钮总是可用，点了就排进「AI 待办」
+const aiReady = () => true;
+const ASK = "处理 NingLoop 的 AI 待办";
+const pendingFor = (kind, ref) => (S.state.agent_pending || []).find((t) => t.kind === kind && String(t.ref) === String(ref));
+function agentHint(task) {
+  if (!task) return "";
+  if (S.state.agent_api) return `<div class="banner">已交给配置的模型接口处理（待办 #${task.id}），好了会自动填进来。</div>`;
+  return `<div class="banner ai">已排进 AI 待办 #${task.id}。在 Claude Code / Codex / WorkBuddy 里打开 NingLoop 文件夹，说「<b>${ASK}</b>」，写好会自动填进来。
+    <div class="row" style="margin-top:8px"><button class="small" data-act="copy-ask">复制这句话</button>
+    <button class="small" data-act="agent-copy" data-id="${task.id}">复制任务说明（发给任何 AI 都行）</button>
+    <button class="small" data-act="agent-paste" data-id="${task.id}">粘贴 AI 的结果</button></div></div>`;
+}
 
 // ---------- 极简 Markdown ----------
 function md(text) {
@@ -250,7 +261,8 @@ function planPage() {
     <tbody>${rowsFor(list)}</tbody></table></div>`;
   return `<div class="head"><h1>下一步创作计划</h1><span class="sub">本周 ${week}</span><div class="grow"></div>
     <button data-act="plan" data-ai="">按数据生成本周计划</button>
-    <button class="primary" data-act="plan-refine" ${aiReady() ? "" : "disabled title='先在设置页配置大模型'"}>用 AI 把方向写成具体标题</button></div>
+    <button data-act="plan-refine">把方向写成具体标题</button>
+    <button class="primary" data-act="plan-scripts">本周选题全部出稿</button></div>
     <div class="card"><p style="margin:0">计划由规则从复盘里推出来：双强型 → 系列续集；泛流量型 → 同结构续作只补结尾钩；垂直型 → 换壳扩曝光；状态异常 → 待重测；
       再加一个没做过的母题、一个评论区高频提问。每周最多 ${S.method.params.max_p0} 条 P0，一条选题只改一个变量。点任意一行进入创作流程，发布后采集到数据会自动验收。</p></div>
     ${weeks.length ? weeks.map((w) => `<div class="card"><h2>${w === week ? "本周" : w}</h2>${table(items.filter((c) => c.week === w))}</div>`).join("")
@@ -295,18 +307,18 @@ function contentDrawer(c) {
         <label class="field"><span>阶段</span><select data-c="stage">${stages.map((s) => `<option ${s === c.stage ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></label>
         <label class="field"><span>优先级</span><select data-c="priority">${["", "P0", "P1", "P2"].map((p) => `<option ${p === (c.priority || "") ? "selected" : ""}>${p}</option>`).join("")}</select></label>
         <label class="field"><span>排期</span><input type="date" data-c="schedule_date" value="${esc(c.schedule_date || "")}"></label></div></div>
+    <div class="card"><h2>${c.workflow === "talk" ? "口播稿" : "脚本"}</h2>
+      ${pendingFor("script", c.id) ? agentHint(pendingFor("script", c.id)) : `<div class="row" style="margin-bottom:8px">
+        <button class="primary" data-act="content-ai">出稿</button>
+        <span class="hint grow">一步出完：结构没定的会按字典定好，带 5 个备选标题、三个平台的结尾改法和自检。由你正在用的 AI 助手来写</span>
+        <button class="small" data-act="content-scaffold">只要骨架</button></div>`}
+      <textarea data-c="script" style="min-height:260px;font-family:inherit">${esc(c.script || "")}</textarea>
+      <label class="field" style="margin-top:12px"><span>备注</span><textarea data-c="notes">${esc(c.notes || "")}</textarea></label></div>
     <div class="card"><h2>这一阶段要做到</h2>${stageItems.length ? stageItems.map((it, i) => `<label class="field"><input type="checkbox" data-check="${i}" ${checks[i] ? "checked" : ""}>${esc(it)}</label>`).join("") : `<p class="sub">这一阶段没有检查项。</p>`}
       <div class="row"><button data-act="content-next" ${stages.indexOf(c.stage) >= stages.length - 1 ? "disabled" : ""}>完成，进入下一阶段</button>
       ${c.id ? `<button data-act="content-publish">带着这条去发布</button>` : ""}</div></div>
     <div class="card"><h2>结构（发布前打标，只改一个变量）</h2><div class="grid k3" style="margin:0">${Object.keys(S.method.tags).map((f) => tagSelect(f, c[f], "data-c")).join("")}</div>
       ${c.archetype ? comboHint(c) : ""}</div>
-    <div class="card"><h2>${c.workflow === "talk" ? "口播稿 / 提纲" : "脚本"}</h2>
-      <div class="row" style="margin-bottom:8px"><button data-act="content-scaffold" ${c.id ? "" : "disabled"}>按原型生成四段骨架</button>
-        <button data-act="content-ai" data-kind="script" ${c.id && aiReady() ? "" : "disabled"}>AI 写${c.workflow === "talk" ? "口播稿" : "脚本"}</button>
-        <button data-act="content-ai" data-kind="titles" ${c.id && aiReady() ? "" : "disabled"}>AI 出 5 个标题</button>
-        ${aiReady() ? "" : `<span class="hint">配置大模型后可用 AI</span>`}</div>
-      <textarea data-c="script" style="min-height:260px;font-family:inherit">${esc(c.script || "")}</textarea>
-      <label class="field" style="margin-top:12px"><span>备注</span><textarea data-c="notes">${esc(c.notes || "")}</textarea></label></div>
     <div class="card"><h2>目标指标与验收</h2>
       ${targets.map((t, i) => `<div class="row" style="margin-bottom:8px"><select data-t="metric" data-ti="${i}" style="width:160px"><option value="">（不设）</option>
         ${["views", "finish_rate", "follow_rate", "share_rate", "comment_rate", "intent_rate"].map((m) => `<option value="${m}" ${m === t.metric ? "selected" : ""}>${metricName(m)}</option>`).join("")}</select>
@@ -389,7 +401,7 @@ function commentsPage() {
           <label class="field"><span>适用平台</span><div class="row">${PF.map((p) => `<label><input type="checkbox" class="r-pf" value="${p}" ${(rule.platforms || "douyin,xhs,channels").includes(p) ? "checked" : ""}>${pfName(p)}</label>`).join("")}</div></label>
           <label class="field"><span>回复模板（一行一条，随机选一条）。{甲|乙} 随机选一个词，{nick} 对方昵称，{asset} 领取的资料，{path} 去哪领</span>
             <textarea id="r-tpl" style="min-height:110px">${esc((rule.templates || []).join("\n"))}</textarea></label>
-          <label class="field"><input type="checkbox" id="r-ai" ${rule.use_ai ? "checked" : ""}>用大模型写回复（失败时回退到模板）</label>
+          <label class="field"><input type="checkbox" id="r-ai" ${rule.use_ai ? "checked" : ""}>用大模型写回复（需要在「设置 → AI → 高级」里接模型接口；没接就用模板）</label>
           <label class="field"><input type="checkbox" id="r-intent" ${rule.is_intent ? "checked" : ""}>命中的评论计入「领取意向」（漏斗 S5）</label>
           <label class="field"><input type="checkbox" id="r-auto" ${rule.auto_send ? "checked" : ""}>自动发送（实验性，只对抖音、视频号生效）</label>
           <label class="field"><span>每天最多自动发送</span><input id="r-cap" type="number" min="1" max="200" value="${rule.daily_cap || 20}" style="width:120px"></label>
@@ -431,7 +443,7 @@ function benchPage() {
     <div class="grid k4" style="margin:0">${bars("motif", "母题")}${bars("archetype", "原型")}${bars("hook_open", "开头钩")}${bars("hook_end", "结尾钩")}</div></div>` : "";
   const untagged = B.hits.filter((p) => p.status === "new").map((p) => [p.platform, p.post_id]);
   const hits = `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">对标爆款</h2><span class="sub">${B.hits.length} 条，按爆款倍数排序</span><span class="grow"></span>
-      ${untagged.length ? `<button class="small" data-act="bench-analyze-all" ${aiReady() ? "" : "disabled title='先在设置页配置大模型'"}>AI 拆解未拆解的 ${Math.min(untagged.length, 10)} 条</button>` : ""}</div>
+      ${untagged.length ? `<button class="small" data-act="bench-analyze-all">AI 拆解未拆解的 ${Math.min(untagged.length, 10)} 条</button>` : ""}</div>
     ${B.hits.length ? `<div class="table-wrap"><table><thead><tr><th>作品</th><th>互动</th><th>倍数</th><th>结构</th><th>状态</th></tr></thead><tbody>
     ${B.hits.map((p, i) => `<tr class="click" data-act="bench-open" data-i="${i}"><td class="title-cell"><div class="t" title="${esc(p.title)}">${esc(cleanTitle(p.title))}</div>
         <div class="sub">${pfDot(p.platform)}${esc(p.bench_name)} · ${day(p.post_time)}${p.duration_sec ? " · " + sec(p.duration_sec) : ""}</div></td>
@@ -455,7 +467,7 @@ function benchDrawer(p) {
       ${p.tags.archetype ? comboHint(p.tags) : ""}
       <label class="field"><span>拆解笔记（开头怎么抓人、结构怎么推进、结尾留了什么动作、为什么能爆、我们怎么借）</span><textarea id="bench-analysis" style="min-height:180px">${esc(p.analysis || "")}</textarea></label>
       <div class="row"><button class="primary" data-act="bench-save">保存拆解</button>
-        <button data-act="bench-analyze" ${aiReady() ? "" : "disabled title='先在设置页配置大模型'"}>AI 拆解</button>
+        <button data-act="bench-analyze">AI 拆解</button>
         <span class="grow"></span><button data-act="bench-ignore">${p.status === "ignored" ? "取消忽略" : "忽略这条"}</button>
         <button class="primary" data-act="bench-use" ${p.tags.archetype ? "" : "disabled title='先拆解出原型'"}>${p.content_id ? "打开复刻选题" : "用这个结构做一条"}</button></div>
       <p class="hint">借结构不借选题：结构标签会带到「创作」里，选题要换成自己能兑现的内容，并先过定位三闸。</p></div></div>`;
@@ -466,7 +478,8 @@ function reviewPage() {
   const running = S.state.jobs.some((j) => j.type === "review" && (j.status === "pending" || j.status === "running"));
   return `<div class="head"><h1>复盘</h1><div class="grow"></div>
     <select id="rv-days" style="width:auto"><option value="7">近 7 天</option><option value="14">近 14 天</option><option value="30">近 30 天</option><option value="0">全部</option></select>
-    <button data-act="review" data-ai="">规则复盘</button><button class="primary" data-act="review" data-ai="1" ${aiReady() ? "" : "disabled title='先在设置页配置大模型'"}>AI 复盘</button></div>
+    <button data-act="review" data-ai="">规则复盘</button><button class="primary" data-act="review" data-ai="1">AI 复盘</button></div>
+  ${(S.state.agent_pending || []).filter((t) => t.kind === "review").map(agentHint).join("")}
   <div class="card"><p style="margin:0">按方法论的顺序：定位检查 → 数据校验 → 五段漏斗（找本周唯一要改的那一段）→ 单条判定 → 四个判断 → 结构矩阵 → 上期计划验收 → 评论区信号 → 下一步计划。
     复盘里的下一步只是预览，去「计划」页生成后才会进入创作流程。</p></div>
   ${running ? `<div class="card sub">正在生成复盘…</div>` : ""}
@@ -547,6 +560,22 @@ function accountsTable() {
 }
 
 // ---------- 任务 / 设置 ----------
+function agentPage() {
+  const A = S.agent;
+  if (!A) return `<div class="card sub">加载中…</div>`;
+  return `<div class="head"><h1>AI 待办</h1><span class="sub">出稿、AI 复盘、对标拆解都在这里排队，由你正在用的 AI 助手来做</span></div>
+  <div class="card"><h2>怎么让 AI 助手处理</h2>
+    <ol class="steps"><li>在 Claude Code、Codex 或 WorkBuddy 里打开 NingLoop 所在的文件夹（它们会读到文件夹里的 AGENTS.md / CLAUDE.md，知道怎么做）。</li>
+      <li>说一句「<b>${ASK}</b>」。想直接写一条新选题，就说「用 NingLoop 写个脚本：你的选题」。</li>
+      <li>它写完会自动交回来，稿子出现在「创作」里对应的选题上，复盘出现在「复盘」页。</li></ol>
+    <div class="row"><button class="primary" data-act="copy-ask">复制这句话</button><span class="hint">用网页版聊天的 AI 也行：点下面的「复制任务说明」发给它，再把它的回答「粘贴结果」交回来。</span></div></div>
+  <div class="card"><h2>待处理 ${A.pending.length ? A.pending.length + " 条" : ""}</h2>
+    ${A.pending.length ? `<table><tbody>${A.pending.map((t) => `<tr><td style="width:60px" class="sub">#${t.id}</td><td>${esc(t.label)}</td><td class="sub" style="width:110px">${dt(t.created_at)}</td>
+      <td style="text-align:right;white-space:nowrap"><button class="small" data-act="agent-copy" data-id="${t.id}">复制任务说明</button>
+        <button class="small" data-act="agent-paste" data-id="${t.id}">粘贴结果</button><button class="small danger" data-act="agent-cancel" data-id="${t.id}">取消</button></td></tr>`).join("")}</tbody></table>`
+      : `<p class="sub">没有待办。在「创作」里点选题的「出稿」，或在「计划」页点「本周选题全部出稿」。</p>`}</div>
+  ${A.recent.length ? `<div class="card"><h2>最近完成</h2>${A.recent.map((t) => `<div class="row"><span class="status done">#${t.id}</span><span class="grow">${esc(t.note || "")}</span><span class="sub">${dt(t.done_at)}</span></div>`).join("")}</div>` : ""}`;
+}
 const jobsPage = () => `<div class="head"><h1>任务</h1><span class="sub">登录、发布、采集、抓评论都在这里排队，一次只执行一个</span></div><div class="card"><div id="live-jobs"></div></div>`;
 function settingsPage() {
   const s = S.state.settings, M = S.method, prof = M.profile, P = M.params;
@@ -573,11 +602,14 @@ function settingsPage() {
     <label class="field"><span>每个账号每次最多采集多少条作品</span><input type="number" id="st-max" min="1" max="100" value="${s.max_posts}"></label>
     <label class="field"><input type="checkbox" id="st-headless" ${s.headless ? "checked" : ""}>采集时不显示浏览器窗口（采集总失败时可以取消勾选，看看页面停在哪）</label>
     <label class="field"><span>使用本机的 Chrome（可选，填 chrome.exe 的完整路径；留空用自带浏览器）</span><input id="st-chrome" value="${esc(s.chrome_path)}"></label>
-  </div><div class="card"><h2>大模型（AI 复盘、选题标题、写稿、评论回复）</h2>
-    <p class="hint">支持所有兼容 OpenAI 接口的服务，例如 Kimi、DeepSeek、通义千问。密钥只保存在这台电脑的 data/settings.json 里；用到 AI 时，相关的标题、数据或评论会发给你填的这个服务。</p>
+  </div><div class="card"><h2>AI</h2>
+    <p>出稿、AI 复盘、对标拆解都交给你正在用的 AI 助手（Claude Code、Codex、WorkBuddy），<b>不需要另外配模型</b>。点了这些按钮会排进「AI 待办」，在助手里说「${ASK}」即可。</p>
+    <details><summary class="hint">高级（可选）：不用 AI 助手时，自己接一个兼容 OpenAI 的模型接口，工作台会自动处理待办</summary>
+    <p class="hint">例如 Kimi、DeepSeek、通义千问。密钥只保存在这台电脑的 data/settings.json 里。</p>
     <label class="field"><span>接口地址</span><input id="st-url" value="${esc(s.ai_base_url)}"></label>
     <label class="field"><span>模型名</span><input id="st-model" value="${esc(s.ai_model)}" placeholder="填你的服务商提供的模型名"></label>
     <label class="field"><span>密钥${s.ai_api_key_set ? "（已保存，留空表示不修改）" : ""}</span><input id="st-key" type="password" autocomplete="off"></label>
+    </details>
   </div></div>
   <div class="card"><h2>对标账号（TikHub）</h2>
     <p class="hint">对标账号的公开作品通过 <a href="https://tikhub.io" target="_blank" rel="noreferrer">TikHub</a> 读取，按次计费。密钥只保存在这台电脑的 data/settings.json 里。</p>
@@ -595,7 +627,7 @@ function settingsPage() {
 }
 
 // ---------- 渲染与轮询 ----------
-const PAGES = { dashboard, bench: benchPage, review: reviewPage, plan: planPage, create: createPage, comments: commentsPage, publish: publishPage, accounts: accountsPage, jobs: jobsPage, settings: settingsPage };
+const PAGES = { dashboard, agent: agentPage, bench: benchPage, review: reviewPage, plan: planPage, create: createPage, comments: commentsPage, publish: publishPage, accounts: accountsPage, jobs: jobsPage, settings: settingsPage };
 function live() {
   const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
   set("live-publish", jobsTable(S.state.jobs.filter((j) => j.type === "publish").slice(0, 10), "还没有发布记录。"));
@@ -603,6 +635,7 @@ function live() {
   set("live-jobs", jobsTable(S.state.jobs, "还没有任务。"));
   const active = S.state.jobs.filter((j) => j.status === "pending" || j.status === "running").length;
   const badge = $("#job-badge"); badge.hidden = !active; badge.textContent = active;
+  const ag = (S.state.agent_pending || []).length, ab = $("#agent-badge"); ab.hidden = !ag; ab.textContent = ag;
 }
 function render() {
   document.querySelectorAll(".side a").forEach((a) => a.classList.toggle("active", a.dataset.page === S.page));
@@ -616,6 +649,7 @@ async function go(page) {
   if (["plan", "create", "publish"].includes(page)) S.contents = (await api("/api/contents")).contents;
   if (page === "comments") S.comments = await api("/api/comments");
   if (page === "bench") S.bench = await api(`/api/bench?days=${S.benchDays}`);
+  if (page === "agent") S.agent = await api("/api/agent");
   render();
 }
 let lastDone = null, pollTimer;
@@ -692,13 +726,31 @@ const ACTIONS = {
   "publish-unlink": () => { S.form.content_id = null; render(); },
   "job-log": async (el) => { const id = +el.dataset.id; S.openJob = S.openJob === id ? null : id; S.jobLog = S.openJob ? (await api("/api/jobs/" + id)).log : ""; live(); },
   "job-cancel": async (el) => { await api(`/api/jobs/${el.dataset.id}/cancel`, {}); await refresh(); },
-  review: async (el) => { await api("/api/review", { days: +$("#rv-days").value, ai: !!el.dataset.ai }); toast("正在生成复盘…"); await refresh(); render(); },
+  review: async (el) => { await api("/api/review", { days: +$("#rv-days").value, ai: !!el.dataset.ai });
+    toast(el.dataset.ai && !S.state.agent_api ? `已排进 AI 待办：在 AI 助手里说「${ASK}」` : "正在生成复盘…"); await refresh(); render(); },
   "review-del": async (el) => { await api("/api/reviews/delete", { id: +el.dataset.id }); await go("review"); },
   plan: async () => { await api("/api/plan", { days: 14 }); toast("正在生成本周计划…"); await refresh(); },
   "plan-refine": async () => {
     const ids = S.contents.filter((c) => c.source === "plan" && c.week === S.method.week && c.stage === S.method.workflows[c.workflow].stages[0][0]).map((c) => c.id);
-    await api("/api/plan/refine", { ids }); toast("大模型正在细化标题…"); await refresh();
+    await api("/api/plan/refine", { ids }); toast(S.state.agent_api ? "已交给模型接口" : `已排进 AI 待办：在 AI 助手里说「${ASK}」`); await refresh();
   },
+  "plan-scripts": async () => {
+    const ids = S.contents.filter((c) => c.source === "plan" && c.week === S.method.week && !c.script && !c.archived).map((c) => c.id);
+    if (!ids.length) return toast("本周没有还没出稿的选题");
+    await api("/api/contents/ai", { ids }); toast(S.state.agent_api ? `${ids.length} 条已交给模型接口` : `${ids.length} 条已排进 AI 待办：在 AI 助手里说「${ASK}」`); await refresh(); await go("agent");
+  },
+  "copy-ask": async () => { try { await navigator.clipboard.writeText(ASK); toast("已复制，粘贴到 AI 助手里"); } catch { toast(ASK); } },
+  "agent-copy": async (el) => {
+    const { brief } = await api(`/api/agent/${el.dataset.id}/brief`);
+    try { await navigator.clipboard.writeText(brief); toast("任务说明已复制，发给 AI 后把它的回答粘贴回来"); } catch { toast("复制失败"); }
+  },
+  "agent-paste": async (el) => {
+    const text = prompt("把 AI 写好的结果整段粘贴进来：");
+    if (!text) return;
+    const { note } = await api("/api/agent/submit", { id: +el.dataset.id, text }); toast(note); await refresh(); await go(S.page);
+    if (S.editing) { S.contents = (await api("/api/contents")).contents; openContent(S.contents.find((x) => x.id === S.editing.id)); }
+  },
+  "agent-cancel": async (el) => { await api("/api/agent/cancel", { id: +el.dataset.id }); await refresh(); await go("agent"); },
   "new-content": (el) => openContent({ workflow: el.dataset.wf, stage: S.method.workflows[el.dataset.wf].stages[0][0], targets: [], checklist: {}, posts: [], source: "manual" }),
   "edit-content": (el) => openContent(S.contents.find((c) => c.id === +el.dataset.id)),
   "content-save": async () => {
@@ -715,10 +767,12 @@ const ACTIONS = {
     S.contents = (await api("/api/contents")).contents;
     openContent(S.contents.find((x) => x.id === id)); render();
   },
-  "content-scaffold": async () => { const c = readContentForm(); await api("/api/contents/save", c); await api("/api/contents/scaffold", { id: c.id });
-    S.contents = (await api("/api/contents")).contents; openContent(S.contents.find((x) => x.id === c.id)); },
-  "content-ai": async (el) => { const c = readContentForm(); await api("/api/contents/save", c); await api("/api/contents/ai", { id: c.id, kind: el.dataset.kind });
-    toast("大模型在写，写好会自动填进来"); await refresh(); },
+  "content-scaffold": async () => { const c = readContentForm(); const { id } = await api("/api/contents/save", c); await api("/api/contents/scaffold", { id });
+    S.contents = (await api("/api/contents")).contents; openContent(S.contents.find((x) => x.id === id)); },
+  "content-ai": async () => {
+    const c = readContentForm(); const { id } = await api("/api/contents/save", c); await api("/api/contents/ai", { id });
+    await refresh(); S.contents = (await api("/api/contents")).contents; openContent(S.contents.find((x) => x.id === id)); if (S.page !== "dashboard") render();
+  },
   "content-publish": async () => {
     const c = readContentForm(); await api("/api/contents/save", c);
     Object.assign(S.form, { content_id: c.id, title: c.title.replace(/^【[^】]*】/, "").slice(0, 60) });
@@ -753,10 +807,11 @@ const ACTIONS = {
     await api("/api/bench/mark", { platform: p.platform, post_id: p.post_id, tags, analysis: $("#bench-analysis").value });
     toast("拆解已保存"); await reopenBench();
   },
-  "bench-analyze": async () => { const p = S.benchOpen; await api("/api/bench/analyze", { posts: [{ platform: p.platform, post_id: p.post_id }] }); toast("大模型在拆解，好了会自动填进来"); await refresh(); },
+  "bench-analyze": async () => { const p = S.benchOpen; await api("/api/bench/analyze", { posts: [{ platform: p.platform, post_id: p.post_id }] });
+    toast(S.state.agent_api ? "已交给模型接口" : `已排进 AI 待办：在 AI 助手里说「${ASK}」`); await refresh(); },
   "bench-analyze-all": async () => {
     const posts = S.bench.hits.filter((p) => p.status === "new").slice(0, 10).map((p) => ({ platform: p.platform, post_id: p.post_id }));
-    await api("/api/bench/analyze", { posts }); toast(`大模型在拆解 ${posts.length} 条`); await refresh();
+    await api("/api/bench/analyze", { posts }); toast(S.state.agent_api ? `${posts.length} 条已交给模型接口` : `${posts.length} 条已排进 AI 待办：在 AI 助手里说「${ASK}」`); await refresh();
   },
   "bench-ignore": async () => { const p = S.benchOpen; await api("/api/bench/mark", { platform: p.platform, post_id: p.post_id, status: p.status === "ignored" ? "new" : "ignored" }); await reopenBench(); },
   "bench-use": async () => {

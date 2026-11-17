@@ -1,0 +1,5 @@
+#!/bin/sh
+# NingLoop 命令行：macOS / Linux / Windows 的 Git Bash 都能用
+cd "$(dirname "$0")" || exit 1
+if [ -x .venv/Scripts/python.exe ]; then exec .venv/Scripts/python.exe -m workbench "$@"; fi
+exec .venv/bin/python -m workbench "$@"

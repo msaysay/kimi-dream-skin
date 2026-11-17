@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 
-from . import config, contents, db, method, planner, review
+from . import agent, config, contents, db, method, planner, review
 
 ENV = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
 
@@ -131,32 +131,19 @@ class Worker(threading.Thread):
                               config.ROOT)
             return code == 0
         if kind == "review":
-            review_id = review.create(con, p.get("days") or None, bool(p.get("ai")))
+            review_id = review.create(con, p.get("days") or None)
             self.log(con, job_id, f"复盘已生成（编号 {review_id}）")
             return True
         if kind == "plan":
-            created = planner.generate(con, p.get("days") or 14, bool(p.get("ai")), log=lambda m: self.log(con, job_id, m))
+            created = planner.generate(con, p.get("days") or 14, log=lambda m: self.log(con, job_id, m))
             return created is not None
-        if kind == "refine":
-            planner.refine_titles(con, [int(i) for i in p["ids"]], log=lambda m: self.log(con, job_id, m))
-            return True
-        if kind == "ai_script":
-            c = contents.get(con, int(p["content_id"]))
-            text = review.chat([{"role": "user", "content": contents.ai_prompt(c, method.load_profile(), p.get("kind") or "script")}])
-            field = "notes" if p.get("kind") == "titles" else "script"
-            sep = "\n\n---\n" if c[field] else ""
-            contents.save(con, {"id": c["id"], field: (c[field] or "") + sep + text.strip()})
-            self.log(con, job_id, "已写进这条内容的" + ("备注" if field == "notes" else "脚本"))
-            return True
         if kind == "bench":
             from . import benchmarks
             ok, new = benchmarks.refresh(con, p.get("bench_id"), log=lambda m: self.log(con, job_id, m))
             return ok > 0
-        if kind == "bench_analyze":
-            from . import benchmarks
-            for platform, post_id in p["posts"]:
-                benchmarks.analyze(con, platform, post_id)
-                self.log(con, job_id, f"已拆解 {post_id}")
+        if kind == "agent_auto":  # 配了模型接口时，工作台自己处理 AI 待办
+            for task_id in p["tasks"]:
+                self.log(con, job_id, agent.run_with_api(con, task_id))
             return True
         if kind in ("comments", "comment_send"):
             action = "comments" if kind == "comments" else "send-comments"

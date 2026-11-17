@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import analytics, benchmarks, comments, config, contents, db, demo, importer, jobs, method, planner, tikhub
+from . import agent, analytics, benchmarks, comments, config, contents, db, demo, importer, jobs, method, planner, tikhub
 
 ACCOUNT_RE = re.compile(r"^[\w一-鿿-]{1,30}$")
 
@@ -44,7 +44,17 @@ def state(con, worker):
         j["params"] = json.loads(j["params"])
     return {"accounts": accounts, "jobs": job_rows, "settings": config.public_settings(), "sau_installed": config.sau_installed(),
             "platforms": config.PLATFORMS, "demo_account": config.DEMO_ACCOUNT, "busy": worker.current is not None,
-            "has_data": con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] > 0}
+            "has_data": con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] > 0,
+            "agent_pending": [{"id": t["id"], "kind": t["kind"], "ref": t["ref"]} for t in db.rows(con, "SELECT id, kind, ref FROM agent_tasks WHERE status='pending'")],
+            "agent_api": agent.api_ready()}
+
+
+def request_ai(con, kind, ref, params=None):
+    """建一条 AI 待办；配了模型接口就顺手排一个任务让工作台自己做，否则等 AI 助手来领。"""
+    task_id = agent.create(con, kind, ref, params)
+    if agent.api_ready():
+        jobs.enqueue(con, "agent_auto", {"tasks": [task_id]})
+    return task_id
 
 
 def require_account(con, platform, account):
@@ -109,7 +119,10 @@ def api_post(con, worker, path, body):
                 con.execute("UPDATE contents SET stage='发布', updated_at=? WHERE id=?", (jobs.now_ms(), int(body["content_id"])))
         return {"jobs": [jobs.enqueue(con, "publish", p) for p in queued]}
     if path == "/api/review":
-        return {"job": jobs.enqueue(con, "review", {"days": int(body.get("days") or 0), "ai": bool(body.get("ai"))})}
+        days = int(body.get("days") or 0)
+        if body.get("ai"):
+            return {"task": request_ai(con, "review", f"review-{days}-{jobs.now_ms() // 3600000}", {"days": days})}
+        return {"job": jobs.enqueue(con, "review", {"days": days})}
     if path == "/api/reviews/delete":
         with con:
             con.execute("DELETE FROM reviews WHERE id=?", (body.get("id"),))
@@ -158,12 +171,15 @@ def api_post(con, worker, path, body):
             raise ApiError(str(e))
     # ---- 计划与内容 ----
     if path == "/api/plan":
-        return {"job": jobs.enqueue(con, "plan", {"days": int(body.get("days") or 14), "ai": bool(body.get("ai"))})}
+        return {"job": jobs.enqueue(con, "plan", {"days": int(body.get("days") or 14)})}
     if path == "/api/plan/refine":
         ids = [int(i) for i in body.get("ids") or []]
         if not ids:
             raise ApiError("没有要细化的选题")
-        return {"job": jobs.enqueue(con, "refine", {"ids": ids})}
+        task_id = planner.refine_titles(con, ids)
+        if agent.api_ready():
+            jobs.enqueue(con, "agent_auto", {"tasks": [task_id]})
+        return {"task": task_id}
     if path == "/api/contents/save":
         try:
             return {"id": contents.save(con, body)}
@@ -184,10 +200,11 @@ def api_post(con, worker, path, body):
         text = contents.scaffold(c, method.load_profile())
         contents.save(con, {"id": c["id"], "script": text if not c["script"] else c["script"] + "\n\n---\n" + text})
         return {"ok": True}
-    if path == "/api/contents/ai":
-        if not (config.load_settings()["ai_api_key"] and config.load_settings()["ai_model"]):
-            raise ApiError("还没有配置大模型：请在「设置」页填写")
-        return {"job": jobs.enqueue(con, "ai_script", {"content_id": int(body["id"]), "kind": body.get("kind") or "script"})}
+    if path == "/api/contents/ai":  # 一键出稿
+        ids = [int(i) for i in (body.get("ids") or [body.get("id")]) if i]
+        if not ids:
+            raise ApiError("没有要出稿的选题")
+        return {"tasks": [request_ai(con, "script", i) for i in ids]}
     # ---- 对标账号 ----
     if path == "/api/bench/resolve":
         if body.get("platform") not in config.PLATFORMS:
@@ -221,12 +238,19 @@ def api_post(con, worker, path, body):
             raise ApiError(str(e))
         return {"ok": True}
     if path == "/api/bench/analyze":
-        if not (config.load_settings()["ai_api_key"] and config.load_settings()["ai_model"]):
-            raise ApiError("还没有配置大模型：请在「设置」页填写")
-        posts = [[x["platform"], x["post_id"]] for x in body.get("posts") or []]
+        posts = [f'{x["platform"]}|{x["post_id"]}' for x in body.get("posts") or []]
         if not posts:
             raise ApiError("没有要拆解的作品")
-        return {"job": jobs.enqueue(con, "bench_analyze", {"posts": posts})}
+        return {"tasks": [request_ai(con, "bench", ref) for ref in posts]}
+    if path == "/api/agent/cancel":
+        with con:
+            con.execute("UPDATE agent_tasks SET status='cancelled', done_at=? WHERE id=? AND status='pending'", (jobs.now_ms(), int(body["id"])))
+        return {"ok": True}
+    if path == "/api/agent/submit":  # 也可以把 AI 写好的结果粘贴进来
+        try:
+            return {"note": agent.submit(con, int(body["id"]), body.get("text") or "")}
+        except ValueError as e:
+            raise ApiError(str(e))
     if path == "/api/bench/to_content":
         try:
             return {"id": benchmarks.to_content(con, body["platform"], body["post_id"])}
@@ -306,6 +330,16 @@ def api_get(con, worker, path, query):
         all_posts = db.rows(con, "SELECT COUNT(*) AS n FROM bench_posts")[0]["n"]
         return {**d, "usage": benchmarks.usage(con), "daily_cost": benchmarks.daily_cost(con), "post_total": all_posts,
                 "prices": tikhub.PRICES, "status_names": benchmarks.STATUS}
+    if path == "/api/agent":
+        tasks = agent.pending(con)
+        done = db.rows(con, "SELECT id, kind, note, done_at FROM agent_tasks WHERE status='done' ORDER BY done_at DESC LIMIT 5")
+        return {"pending": tasks, "recent": done, "api_ready": agent.api_ready(), "kinds": agent.KINDS}
+    m = re.fullmatch(r"/api/agent/(\d+)/brief", path)
+    if m:
+        try:
+            return {"brief": agent.brief(con, int(m.group(1)))}
+        except ValueError as e:
+            raise ApiError(str(e), 404)
     if path == "/api/contents":
         return {"contents": contents.with_acceptance(con, contents.list_all(con, bool(query.get("all"))))}
     if path == "/api/comments":

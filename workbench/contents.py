@@ -103,6 +103,9 @@ def save(con, data):
     for f, (_, values) in method.TAG_FIELDS.items():
         if data.get(f) and data[f] not in values:
             raise ValueError(f"{method.TAG_FIELDS[f][0]}「{data[f]}」不在字典里")
+    if data.get("id") and not data.get("workflow"):  # 更新时沿用原来的工作流，不要按标签重新猜
+        old = rows(con, "SELECT workflow FROM contents WHERE id=?", int(data["id"]))
+        data["workflow"] = old[0]["workflow"] if old else None
     wf = data.get("workflow") or pick_workflow(data)
     if wf not in load_workflows():
         raise ValueError("不认识的工作流")
@@ -277,26 +280,68 @@ def scaffold(content, profile):
     return "\n".join(lines)
 
 
-def ai_prompt(content, profile, kind):
-    arch = content.get("archetype") or "教程型"
-    skel = method.SKELETONS.get(arch, method.SKELETONS["教程型"])
+WRITING_STAGES = ("写脚本", "口播提纲")
+
+
+def writing_stage(workflow):
+    names = stage_names(workflow)
+    return next((s for s in names if s in WRITING_STAGES), names[min(2, len(names) - 1)])
+
+
+def script_brief(con, content):
+    """出稿的完整任务说明：选题、定位、结构（没定的让 AI 按字典定）、骨架、数据依据、对标拆解、验证过的结构、输出格式。"""
+    from . import analytics, benchmarks
+    profile = method.load_profile()
     talk = content.get("workflow") == "talk"
-    base = [
-        "你是短视频编导，帮这个账号把一条选题写成可以直接开拍的稿子。",
-        method.profile_text(profile),
-        f"选题：{content.get('title')}",
-        f"结构（已定，不许改）：母题 {content.get('motif')}；原型 {arch}（骨架：{method.ARCHETYPES.get(arch, ('', ''))[0]}）；"
-        f"开头钩 {content.get('hook_open')}；中段 {content.get('hook_mid')}；结尾钩 {content.get('hook_end')}；时长档 {content.get('duration_bin')}",
-        f"数据依据：{content.get('basis') or '无'}",
-        "四段任务：" + "；".join(f"{s}：{t}" for s, t in zip(method.SEGMENTS, skel)),
-    ]
-    if kind == "titles":
-        base.append("请给出 5 个标题，每行一个，不要编号以外的解释。标题要兑现开头钩，避免夸大承诺。")
-    elif talk:
-        base.append("请输出 Markdown：先写口播逐字稿（按四段分节，每段标时间码），开头第一句和结尾最后一句单独加粗；"
-                    "每段后面用「画面：」标出要插的画面或剪辑组件；最后附「四句自检」和「三个平台结尾怎么改」。口语化，不要书面腔。")
-    else:
-        base.append("请输出 Markdown：按四段分节写脚本（时间码、旁白、画面描述），开头第一句和结尾最后一句单独加粗；"
-                    "最后附「四句自检」和「三个平台结尾怎么改」。旁白适合 AI 配音，句子短。")
-    base.append("结尾的领取动作只能指向评论区关键词、主页置顶或私信，不要在评论区留微信号或外链。")
-    return "\n".join(base)
+    tags = {f: content.get(f) for f in method.TAG_FIELDS if content.get(f)}
+    L = [f"# 任务：把这条选题写成能直接开拍的{'口播稿' if talk else '脚本'}", "",
+         f"选题：{content.get('title')}",
+         *(["（这是计划生成的选题「方向」：请先定一个具体、能兑现的选题，输出里「标题」的第一条会作为正式选题。）"]
+           if str(content.get("title") or "").startswith("【") else []),
+         f"工作流：{'口播剪辑（先录口播，再用剪辑组件和 Skill 让 AI 剪）' if talk else '选题直出（AI 全自动生成配音、画面 / 数字人、字幕）'}",
+         "", "## 账号定位（不符合的地方要改选题角度，不要硬写）", method.profile_text(profile)]
+    if content.get("basis"):
+        L += ["", "## 为什么做这条（数据依据）", content["basis"]]
+    if content.get("acceptance") or content.get("targets"):
+        L += ["", "## 这条要达成的目标", "；".join(f"{method.METRIC_NAMES.get(t['metric'], t['metric'])} ≥ {t['value']}（{t.get('slot', 'D3')}）"
+                                                for t in content.get("targets") or []) + (f"。{content['acceptance']}" if content.get("acceptance") else "")]
+    if content.get("source") == "benchmark" and content.get("notes"):
+        L += ["", "## 对标爆款的拆解（借结构，不照抄选题）", content["notes"][:3000]]
+    if tags:
+        L += ["", "## 已定的结构（不许改）"] + [f"- {method.TAG_FIELDS[f][0]}：{v}" for f, v in tags.items()]
+    missing = [f for f in ("motif", "archetype", "hook_open", "hook_mid", "hook_end", "duration_bin") if f not in tags]
+    if missing:
+        try:
+            data = analytics.build(con)
+            proven = []
+            for field in ("archetype", "hook_end"):
+                for pf, cells in data["matrix"][field].items():
+                    best = max(cells.items(), key=lambda x: x[1]["follow_rate"] or 0, default=None)
+                    if best and best[1]["follow_rate"]:
+                        proven.append(f"自己账号 {config.PLATFORMS[pf]['name']}：{method.TAG_FIELDS[field][0]}「{best[0]}」关注率最高（{best[1]['follow_rate'] * 100:.2f}%，{best[1]['n']} 条）")
+            bst = benchmarks.load(con, 30)["structure"]
+            if bst["tagged"]:
+                proven.append("对标爆款里最常见：" + "；".join(f"{method.TAG_FIELDS[f][0]} {bst[f][0][0]}" for f in ("archetype", "hook_open", "hook_end") if bst[f]))
+        except Exception:
+            proven = []
+        L += ["", "## 还没定的结构：请你按字典选定（写进输出开头）", "要定：" + "、".join(method.TAG_FIELDS[f][0] for f in missing),
+              method.dictionary_text()]
+        if proven:
+            L += ["已经验证过的结构（优先考虑）："] + [f"- {x}" for x in proven]
+    arch = content.get("archetype")
+    skel = method.SKELETONS.get(arch) if arch else None
+    L += ["", "## 四段骨架", f"按原型「{arch}」：" if skel else "按你选定的原型（各原型的骨架如下）："]
+    for a, sk in ([(arch, skel)] if skel else method.SKELETONS.items()):
+        L.append(f"- {a}：" + "；".join(f"{seg} → {task}" for seg, task in zip(method.SEGMENTS, sk)))
+    L += ["", "## 写作要求",
+          "- 开头 3 秒那一句、结尾 3 秒那个动作逐字写死；结尾要写清领什么、去哪领、或下一集是什么。",
+          f"- 结尾的领取动作只指向评论区关键词「{profile.get('asset_keyword') or 'skill'}」、主页置顶或私信；不要写微信号、手机号或外链。",
+          "- " + ("口语化，像当面说话；每段后面用「画面：」标出要插的画面或剪辑组件。" if talk else "旁白适合 AI 配音，句子短；每段写清画面。"),
+          "- 时长落在选定的时长档里；每 5–8 秒一个新信息点。",
+          "", "## 输出格式（照抄这个结构，开头的 --- 块会被程序读取）",
+          "```", "---", "母题: <字典里的值>", "原型: <字典里的值>", "开头钩: <字典里的值>", "中段留人: <字典里的值>", "结尾钩: <字典里的值>",
+          "时长档: <字典里的值>", "标题: 标题1 | 标题2 | 标题3 | 标题4 | 标题5", "---",
+          f"## 0–3 秒 · 给理由", "…（时间码、旁白、画面）", "## 3–8 秒 · 给结构", "…", "## 8 秒至主体 · 给内容", "…", "## 最后 3 秒 · 给下一步", "…",
+          "## 四句自检", "1. 给理由：… 2. 给结构：… 3. 给内容：… 4. 给下一步：…",
+          "## 三个平台的结尾怎么改", *[f"- {config.PLATFORMS[k]['name']}：…（{v}）" for k, v in method.PLATFORM_ROLES.items()], "```"]
+    return "\n".join(L)

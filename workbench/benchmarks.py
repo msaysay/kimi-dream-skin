@@ -10,7 +10,7 @@ import re
 import statistics
 import time
 
-from . import config, contents, method, review, tikhub
+from . import config, contents, method, tikhub
 from .db import rows
 
 DAY = 86400 * 1000
@@ -160,31 +160,21 @@ def mark(con, platform, post_id, status=None, tags=None, analysis=None):
             con.execute(f"UPDATE bench_posts SET {', '.join(sets)} WHERE platform=? AND post_id=?", (*vals, platform, post_id))
 
 
-ANALYZE_PROMPT = """你在帮一个短视频账号拆解对标账号的爆款。只根据给出的标题文案和数据判断，看不到画面就说明「需看画面确认」。
-先按封闭字典给这条爆款打标签，再写拆解，最后说明这个账号可以怎么借用这个结构（不是照抄选题）。
-只输出一个 JSON 对象：
-{"tags": {"motif": "...", "archetype": "...", "hook_open": "...", "hook_mid": "...", "hook_end": "...", "duration_bin": "..."},
- "analysis": "Markdown：开头怎么抓人 / 结构怎么推进 / 结尾留了什么动作 / 为什么能爆（结合数据）/ 我们怎么借用：给 2 个符合账号定位的选题"}"""
+ANALYZE_PROMPT = """你在帮一个短视频账号拆解对标账号的爆款。只根据给出的标题文案和数据判断，看不到画面的地方写「需看画面确认」。
+先按封闭字典给这条爆款打标签，再写拆解，最后说明这个账号可以怎么借用这个结构（借结构，不照抄选题）。"""
 
 
-def analyze(con, platform, post_id, data=None):
-    """让大模型给对标爆款打标签并写拆解，结果写回作品。"""
+def analyze_brief(con, platform, post_id, data=None):
     data = data or load(con, 0)
     p = data["posts_by_key"].get((platform, post_id))
     if not p:
         raise ValueError("没有这条对标作品")
     L = p["latest"]
-    brief = {"平台": config.PLATFORMS[platform]["name"], "对标账号": p["bench_name"], "标题文案": p["title"][:600],
+    facts = {"平台": config.PLATFORMS[platform]["name"], "对标账号": p["bench_name"], "标题文案": p["title"][:600],
              "时长秒": p["duration_sec"], "点赞": L.get("likes"), "评论": L.get("comments"), "转发": L.get("shares"), "收藏": L.get("collects"),
-             "互动是该账号中位数的倍数": round(p["ratio"], 1) if p["ratio"] else None}
-    text = review.chat([{"role": "system", "content": ANALYZE_PROMPT + "\n\n" + method.dictionary_text()},
-                        {"role": "user", "content": method.profile_text(method.load_profile()) + "\n\n" + json.dumps(brief, ensure_ascii=False)}])
-    m = re.search(r"\{.*\}", text, re.S)
-    if not m:
-        raise RuntimeError("大模型没有按格式返回拆解")
-    out = json.loads(m.group(0))
-    mark(con, platform, post_id, tags=out.get("tags") or {}, analysis=str(out.get("analysis") or "").strip())
-    return out
+             "互动是该账号中位数的倍数": round(p["ratio"], 1) if p.get("ratio") else None, "原作品链接": p["url"]}
+    return "\n\n".join([ANALYZE_PROMPT, method.dictionary_text(), method.profile_text(method.load_profile()),
+                         "这条爆款：", json.dumps(facts, ensure_ascii=False, indent=1)])
 
 
 def to_content(con, platform, post_id):

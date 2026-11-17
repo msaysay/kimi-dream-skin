@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS bench_posts (platform TEXT, post_id TEXT, bench_id IN
 CREATE TABLE IF NOT EXISTS bench_snaps (platform TEXT, post_id TEXT, fetched_at INTEGER, likes INTEGER, comments INTEGER,
   shares INTEGER, collects INTEGER, plays INTEGER, PRIMARY KEY (platform, post_id, fetched_at));
 CREATE TABLE IF NOT EXISTS api_calls (ts INTEGER, path TEXT, ok INTEGER, price REAL);
+-- AI 待办：交给 AI 助手（Claude Code / Codex / WorkBuddy）做的事
+CREATE TABLE IF NOT EXISTS agent_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, ref TEXT, params TEXT DEFAULT '{{}}',
+  status TEXT DEFAULT 'pending', note TEXT, created_at INTEGER, done_at INTEGER);
 CREATE TABLE IF NOT EXISTS comment_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, platforms TEXT,
   keywords TEXT, exclude TEXT DEFAULT '', templates TEXT DEFAULT '[]', use_ai INTEGER DEFAULT 0,
   auto_send INTEGER DEFAULT 0, daily_cap INTEGER DEFAULT 20, enabled INTEGER DEFAULT 1, is_intent INTEGER DEFAULT 0,

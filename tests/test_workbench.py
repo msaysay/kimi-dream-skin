@@ -503,5 +503,118 @@ def test_bench_api(api, tikhub_site):
     assert status == 200 and body["job"]
     state = api("/api/bench")[1]
     assert state["benchmarks"][0]["grp"] == "AI 工具" and state["daily_cost"] == 0.001
-    assert api("/api/bench/analyze", {"posts": [{"platform": "douyin", "post_id": "x"}]})[0] == 400  # 没配大模型
+    assert len(api("/api/bench/analyze", {"posts": [{"platform": "douyin", "post_id": "x"}]})[1]["tasks"]) == 1  # 排进 AI 待办，不用配模型
     assert "tikhub_api_key" not in api("/api/state")[1]["settings"]
+
+
+# ---------- AI 待办：由 AI 助手来做 ----------
+GOOD_SCRIPT = """```
+---
+母题: AI 制作流程拆解
+原型: 教程型
+开头钩: 反常识断言
+中段留人: 步骤承诺
+结尾钩: 资产给予
+时长档: 30–60s
+标题: 不会剪辑反而更适合 AI 剪 | 一小时剪完：4 步流程
+---
+## 0–3 秒 · 给理由
+**「不会剪辑的人，反而最该让 AI 来剪口播。」**
+## 3–8 秒 · 给结构
+一共 4 步。
+## 8 秒至主体 · 给内容
+录、转、剪、检。
+## 最后 3 秒 · 给下一步
+**评论区打 skill，去主页置顶领。**
+```"""
+
+
+def test_agent_script_flow(con):
+    from workbench import agent
+    cid = contents.save(con, {"title": "不会剪辑怎么用 AI 剪口播", "workflow": "talk"})
+    tid = agent.create(con, "script", cid)
+    assert agent.create(con, "script", cid) == tid  # 同一条不重复排队
+    text = agent.brief(con, tid)
+    for part in ("账号定位", "还没定的结构", "四段骨架", "输出格式", f"task-{tid}.md", "口播"):
+        assert part in text
+    with pytest.raises(ValueError, match="不在字典里"):
+        agent.submit(con, tid, GOOD_SCRIPT.replace("原型: 教程型", "原型: 爆款型"))
+    with pytest.raises(ValueError, match="缺少"):
+        agent.submit(con, tid, GOOD_SCRIPT.replace("母题: AI 制作流程拆解\n", ""))
+    with pytest.raises(ValueError, match="四段"):
+        agent.submit(con, tid, GOOD_SCRIPT.replace("0–3 秒", "开头").replace("最后 3 秒", "结尾"))
+    note = agent.submit(con, tid, GOOD_SCRIPT)
+    c = contents.get(con, cid)
+    assert c["workflow"] == "talk" and c["stage"] == "录口播" and "进入「录口播」" in note
+    assert c["archetype"] == "教程型" and c["duration_bin"] == "30–60s"
+    assert "一小时剪完：4 步流程" in c["notes"] and c["script"].startswith("## 0–3 秒")
+    assert agent.pending(con) == []
+    with pytest.raises(ValueError, match="已经是"):
+        agent.submit(con, tid, GOOD_SCRIPT)
+    # 已定的结构不让 AI 改
+    cid2 = contents.save(con, {"title": "另一条", "archetype": "故事型", "motif": "AI 行业人物与公司故事", "hook_open": "悬念提问", "hook_end": "关注理由"})
+    tid2 = agent.create(con, "script", cid2)
+    assert "已定的结构（不许改）" in agent.brief(con, tid2)
+    contents.save(con, {"id": cid2, "title": "【同结构续作】某方向"})
+    assert "选题「方向」" in agent.brief(con, tid2)
+    agent.submit(con, tid2, GOOD_SCRIPT)
+    c2 = contents.get(con, cid2)
+    assert c2["archetype"] == "故事型" and c2["stage"] == "AI 生成"
+    assert c2["title"] == "不会剪辑反而更适合 AI 剪" and "原方向：【同结构续作】某方向" in c2["notes"]
+
+
+def test_agent_review_bench_and_titles(con, tikhub_site, tmp_path):
+    from workbench import agent, benchmarks
+    make_workbook(tmp_path / "wb.xlsx")
+    importer.import_workbook(con, str(tmp_path / "wb.xlsx"), "主号")
+    rid = agent.create(con, "review", "r1", {"days": 0})
+    rb = agent.brief(con, rid)
+    assert "数据摘要（JSON）" in rb and "标签只能从下列值里选" in rb and "宁少AI进化论" in rb
+    agent.submit(con, rid, "# 本周复盘\n\n结论：双强型那条做成系列。" * 2)
+    assert db.rows(con, "SELECT kind FROM reviews")[-1]["kind"] == "ai"
+    benchmarks.add(con, "douyin", "MS4wX", "抖音对标")
+    benchmarks.refresh(con, log=lambda m: None)
+    bid = agent.create(con, "bench", "douyin|dy2")
+    assert "这条爆款" in agent.brief(con, bid)
+    agent.submit(con, bid, "---\n原型: 清单型\n开头钩: 结果奇观\n---\n## 开头怎么抓人\n数字开头。")
+    hit = next(p for p in benchmarks.load(con, 0)["hits"] if p["post_id"] == "dy2")
+    assert hit["tags"] == {"archetype": "清单型", "hook_open": "结果奇观"} and hit["status"] == "studied"
+    ids = planner.generate(con, days=0)[:2]
+    t = planner.refine_titles(con, ids)
+    assert "编号｜标题" in agent.brief(con, t)
+    agent.submit(con, t, "\n".join(f"{i}｜具体标题{i}" for i in ids))
+    assert contents.get(con, ids[0])["title"] == f"具体标题{ids[0]}" and "原方向" in contents.get(con, ids[0])["notes"]
+
+
+def test_agent_cli_end_to_end(tmp_path):
+    import os, subprocess, sys
+    env = dict(os.environ, WORKBENCH_DATA=str(tmp_path / "data"), PYTHONUTF8="1")
+    run = lambda *a: subprocess.run([sys.executable, "-m", "workbench", "agent", *a], cwd=Path(__file__).resolve().parent.parent,
+                                    env=env, capture_output=True, text=True, encoding="utf-8")
+    out = run("new", "用 AI 一小时剪完一条口播", "--talk")
+    assert out.returncode == 0 and "输出格式" in out.stdout
+    task_path = tmp_path / "data" / "agent" / "task-1.md"
+    assert str(task_path) in out.stdout
+    assert "[1] 出稿：用 AI 一小时剪完一条口播" in run("todo").stdout
+    task_path.write_text(GOOD_SCRIPT.replace("原型: 教程型", "原型: 爆款型"), encoding="utf-8")
+    bad = run("submit", "1")
+    assert bad.returncode == 1 and "不在字典里" in bad.stdout
+    task_path.write_text(GOOD_SCRIPT, encoding="utf-8")
+    ok = run("submit", "1")
+    assert ok.returncode == 0 and "稿子已写进" in ok.stdout
+    assert "没有 AI 待办" in run("todo").stdout
+
+
+def test_agent_api(api, con):
+    cid = contents.save(con, {"title": "网页上点出稿"})
+    status, body = api("/api/contents/ai", {"ids": [cid]})
+    assert status == 200 and len(body["tasks"]) == 1
+    tid = body["tasks"][0]
+    state = api("/api/state")[1]
+    assert state["agent_pending"] == [{"id": tid, "kind": "script", "ref": str(cid)}] and state["agent_api"] is False
+    assert api("/api/agent")[1]["pending"][0]["label"] == "出稿：网页上点出稿"
+    assert "输出格式" in api(f"/api/agent/{tid}/brief")[1]["brief"]
+    assert api("/api/agent/submit", {"id": tid, "text": "随便写了几句，没有按格式来"})[0] == 400
+    status, body = api("/api/agent/submit", {"id": tid, "text": GOOD_SCRIPT})
+    assert status == 200 and "稿子已写进" in body["note"]
+    assert api("/api/review", {"days": 7, "ai": True})[1]["task"]

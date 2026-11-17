@@ -211,24 +211,34 @@ def last_acceptance(con):
     return out
 
 
-def create(con, days, use_ai):
-    from . import planner
+def gather(con, days):
+    """复盘要用的全部材料：数据、计划候选、上期验收、评论提问、对标信号。"""
+    from . import benchmarks, planner
     data = analytics.build(con, days)
     questions = planner.top_questions(con, days or 3650)
     plan, notes = planner.candidates(data, questions)
-    from . import benchmarks
     bench_items, bench_notes = benchmarks.plan_candidates(con, days or 30)
-    plan, notes = plan + bench_items, notes + bench_notes
-    bench = benchmarks.load(con, days or 30)
-    accepted = last_acceptance(con)
-    if use_ai:
-        summary = summarize(data, plan, accepted, questions, bench)
-        content = chat([{"role": "system", "content": SYSTEM_PROMPT + "\n\n" + method.dictionary_text()},
-                        {"role": "user", "content": method.profile_text(method.load_profile()) + "\n\n"
-                         + json.dumps(summary, ensure_ascii=False, default=str)}])
-    else:
-        content = rule_report(data, plan, notes, accepted, questions, bench)
+    return {"data": data, "plan": plan + bench_items, "notes": notes + bench_notes, "accepted": last_acceptance(con),
+            "questions": questions, "bench": benchmarks.load(con, days or 30)}
+
+
+def ai_brief(g):
+    """交给 AI 写复盘时的完整说明（规则、字典、定位卡、数据摘要）。"""
+    summary = summarize(g["data"], g["plan"], g["accepted"], g["questions"], g["bench"])
+    return "\n\n".join([SYSTEM_PROMPT, method.dictionary_text(), method.profile_text(method.load_profile()),
+                         "数据摘要（JSON）：", json.dumps(summary, ensure_ascii=False, default=str)])
+
+
+def save(con, days, kind, content):
     with con:
         cur = con.execute("INSERT INTO reviews (created_at, days, kind, content) VALUES (?,?,?,?)",
-                          (int(time.time() * 1000), days or 0, "ai" if use_ai else "rule", content))
+                          (int(time.time() * 1000), days or 0, kind, content))
     return cur.lastrowid
+
+
+def create(con, days, use_ai=False):
+    """规则复盘立即生成；AI 复盘由 AI 助手（或配置的模型接口）按 ai_brief 写，见 agent.py。"""
+    g = gather(con, days)
+    if use_ai:
+        return save(con, days, "ai", chat([{"role": "user", "content": ai_brief(g)}]))
+    return save(con, days, "rule", rule_report(g["data"], g["plan"], g["notes"], g["accepted"], g["questions"], g["bench"]))

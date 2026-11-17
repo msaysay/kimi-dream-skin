@@ -28,6 +28,54 @@ def collect_one(con, platform, account):
     return False
 
 
+def agent_cli(con, args):
+    from . import agent
+    try:
+        if args.action == "todo":
+            tasks = agent.pending(con)
+            if not tasks:
+                print("没有 AI 待办。")
+            for t in tasks:
+                print(f"[{t['id']}] {t['label']}")
+            if tasks:
+                print(f"\n逐条处理：ning agent brief <编号> → 按说明写结果 → ning agent submit <编号>")
+            return 0
+        if args.action in ("new", "script"):
+            if not args.arg:
+                print("请给出选题" if args.action == "new" else "请给出内容编号")
+                return 1
+            if args.action == "new":
+                wf = "talk" if args.talk else "topic"
+                cid = contents.save(con, {"title": args.arg.strip()[:80], "workflow": wf, "source": "manual"})
+            else:
+                cid = contents.get(con, int(args.arg))["id"]
+            task_id = agent.create(con, "script", cid)
+            print(agent.brief(con, task_id))
+            return 0
+        if not args.arg:
+            print("请给出待办编号")
+            return 1
+        if args.action == "brief":
+            print(agent.brief(con, int(args.arg)))
+            return 0
+        if args.action == "cancel":
+            with con:
+                con.execute("UPDATE agent_tasks SET status='cancelled' WHERE id=? AND status='pending'", (int(args.arg),))
+            print("已取消")
+            return 0
+        path = args.file or str(agent.task_file(int(args.arg)))
+        try:
+            text = open(path, encoding="utf-8-sig").read()
+        except OSError:
+            print(f"读不到结果文件：{path}")
+            return 1
+        print(agent.submit(con, int(args.arg), text))
+        return 0
+    except ValueError as e:
+        print(f"没通过：{e}")
+        return 1
+
+
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):  # Windows 终端默认不是 UTF-8
         if hasattr(stream, "reconfigure"):
@@ -45,6 +93,11 @@ def main(argv=None):
         p = sub.add_parser(name, help=text)
         p.add_argument("--platform", choices=list(config.PLATFORMS), required=True)
         p.add_argument("--account", required=True)
+    p = sub.add_parser("agent", help="给 AI 助手用：领 AI 待办、拿任务说明、交结果")
+    p.add_argument("action", choices=["todo", "brief", "submit", "new", "script", "cancel"])
+    p.add_argument("arg", nargs="?", help="待办编号；new 时是选题；script 时是内容编号")
+    p.add_argument("--file", help="submit 时读取的结果文件（默认 data/agent/task-<编号>.md）")
+    p.add_argument("--talk", action="store_true", help="new 时走口播剪辑工作流")
     p = sub.add_parser("review", help="生成复盘并打印")
     p.add_argument("--days", type=int, default=7)
     p.add_argument("--ai", action="store_true")
@@ -93,6 +146,8 @@ def main(argv=None):
         ok = sum(1 for r in results if r[1])
         print(f"成功 {ok} 条，失败 {len(results) - ok} 条（失败的已退回草稿，可以复制后手动回复）")
         return 0 if ok == len(results) else 1
+    if args.cmd == "agent":
+        return agent_cli(con, args)
     if args.cmd == "demo":
         demo.load_demo(con)
         print("示例数据已载入")

@@ -8,7 +8,7 @@ import json
 import re
 import time
 
-from . import analytics, config, contents, method, review
+from . import analytics, config, contents, method
 from .db import rows
 
 QUESTION = re.compile(r"[?？]|怎么|如何|哪里|哪儿|多少|能不能|可不可以|是不是|有没有|求|为什么|啥|什么")
@@ -149,7 +149,7 @@ def top_questions(con, days=14):
     return sorted((tuple(g) for g in groups.values()), key=lambda g: -g[1])
 
 
-def generate(con, days=14, ai=False, log=print):
+def generate(con, days=14, log=print):
     """生成本周计划并写进「内容」，已有同名条目就跳过。返回新建的内容编号。"""
     data = analytics.build(con, days)
     items, notes = candidates(data, top_questions(con, days))
@@ -177,29 +177,10 @@ def generate(con, days=14, ai=False, log=print):
             with con:
                 con.execute("UPDATE bench_posts SET content_id=?, status='used' WHERE platform=? AND post_id=?", (cid, *c["bench"]))
     log(f"本周（{week}）新增 {len(created)} 条选题" + ("；" + "；".join(notes) if notes else ""))
-    if ai and created:
-        refine_titles(con, created, log)
     return created
 
 
-def refine_titles(con, ids, log=print):
-    """让大模型把「形状」写成具体可拍的标题。结构标签不允许改。"""
-    profile = method.load_profile()
-    items = [contents.get(con, i) for i in ids]
-    brief = [{"id": c["id"], "方向": c["title"], "母题": c["motif"], "原型": c["archetype"], "开头钩": c["hook_open"],
-              "结尾钩": c["hook_end"], "依据": c["basis"]} for c in items]
-    prompt = ("下面是本周的选题方向，结构已经由数据决定，不许改动。请为每一条写一个具体可拍的选题标题（30 字以内），"
-              "要符合账号定位、兑现开头钩。只输出 JSON 数组：[{\"id\": 编号, \"title\": \"标题\"}]。\n\n"
-              + method.profile_text(profile) + "\n\n" + json.dumps(brief, ensure_ascii=False))
-    text = review.chat([{"role": "user", "content": prompt}])
-    match = re.search(r"\[.*\]", text, re.S)
-    if not match:
-        raise RuntimeError("大模型没有按格式返回标题")
-    done = 0
-    for item in json.loads(match.group(0)):
-        if int(item.get("id", 0)) in ids and item.get("title"):
-            c = contents.get(con, int(item["id"]))
-            contents.save(con, {"id": c["id"], "title": str(item["title"])[:60],
-                                "notes": (c["notes"] + "\n" if c["notes"] else "") + f"原方向：{c['title']}"})
-            done += 1
-    log(f"大模型细化了 {done} 条选题标题")
+def refine_titles(con, ids):
+    """把选题方向写成具体标题：交给 AI 助手（见 agent.py）。返回待办编号。"""
+    from . import agent
+    return agent.create(con, "titles", ",".join(str(i) for i in sorted(ids)))

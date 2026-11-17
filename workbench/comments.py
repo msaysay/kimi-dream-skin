@@ -106,6 +106,11 @@ def ai_reply(comment, profile):
     return text[:200]
 
 
+def agent_api_ready():
+    from .agent import api_ready
+    return api_ready()
+
+
 def is_question(text):
     return bool(QUESTION.search(text or ""))
 
@@ -127,7 +132,7 @@ def process(con, log=print):
         if rule is None:
             continue  # 没命中规则的留在「待处理」，提问会进下周选题
         reply = ""
-        if rule["use_ai"]:
+        if rule["use_ai"] and agent_api_ready():  # 评论要即时回，只有配了模型接口才用大模型，否则用模板
             try:
                 reply = ai_reply(c, profile)
             except Exception as e:
