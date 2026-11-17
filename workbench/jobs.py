@@ -16,6 +16,9 @@ from . import agent, config, contents, db, method, planner, review
 ENV = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
 
 
+COVER_SKIPPED = re.compile(r"封面[^\n]*(跳过|失败|没选成功|打不开|未能关闭)")
+
+
 def now_ms():
     return int(time.time() * 1000)
 
@@ -125,6 +128,10 @@ class Worker(threading.Thread):
             return code == 0
         if kind == "publish":
             code = self.sau(con, job_id, p["platform"], action_for(p), p["account"], publish_args(p))
+            log = db.rows(con, "SELECT log FROM jobs WHERE id=?", job_id)[0]["log"]
+            if p.get("covers") and COVER_SKIPPED.search(log):  # 引擎设封面失败时只记一行警告然后照常发布，这里把它挑出来
+                self.log(con, job_id, "⚠ 封面没有设上：平台用了默认封面。请到平台的作品管理里手动换成 data/covers 里生成好的那张："
+                                      + "；".join(p["covers"].values()))
             if code != 0:
                 self.log(con, job_id, "发布没有成功。如果上面提示 cookie 缺失或过期，请到「账号」页重新扫码登录；"
                                       "否则可以取消勾选「后台运行」再发一次，看看浏览器停在哪一步。")

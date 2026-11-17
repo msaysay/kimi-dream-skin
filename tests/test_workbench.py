@@ -797,3 +797,23 @@ def test_publish_sends_each_platform_its_own_cover(api, con, tmp_path):
     assert status == 200 and len(prev["items"]) == 2 and prev["items"][0]["url"].startswith("/api/cover/file?d=")
     assert api("/api/cover/preview", {"cover": str(tmp_path / "x.png")})[0] == 400
     assert api("/api/publish", {"files": [str(video)], "title": "t", "cover": str(video), "targets": [{"platform": "douyin", "account": "主号"}]})[0] == 400
+
+
+def test_channels_gets_two_covers_and_can_use_a_separate_wide_image(con, tmp_path):
+    from workbench import covers
+    tall = make_image(tmp_path / "竖.png", 1080, 1440)
+    r = covers.build(str(tall), platforms=["channels"])
+    assert [(it["slot"], it["w"], it["h"], it["mode"]) for it in r["items"]] == [("portrait", 1080, 1440, "crop"), ("landscape", 1440, 1080, "pad")]
+    assert r["items"][0]["keep"] == 1.0                                  # 原图就是 3:4，一点不裁
+    # 单独给一张横版图：4:3 用它（不再模糊填充），3:4 仍用竖图
+    import cv2, numpy as np
+    wide = tmp_path / "横.png"
+    cv2.imencode(".png", np.full((900, 1200, 3), (200, 40, 40), np.uint8))[1].tofile(str(wide))
+    r = covers.build(str(tall), platforms=["channels", "douyin"], landscape_image=str(wide))
+    by = {(it["platform"], it["slot"]): it for it in r["items"]}
+    land = by[("channels", "landscape")]
+    assert land["mode"] == "crop" and land["keep"] == 1.0 and land["from"] == "横版原图"
+    assert covers.read_image(land["path"])[540, 720, 0] > 150           # 蓝色那张
+    assert by[("channels", "portrait")]["from"] == "原图" and by[("douyin", "portrait")]["from"] == "原图"
+    assert r["source2"]["w"] == 1200
+    assert jobs.COVER_SKIPPED.search("WARNING 😵 3:4 竖版封面设置失败，这次先跳过: timeout") and not jobs.COVER_SKIPPED.search("🥳 4:3 横版封面已经设置完成")

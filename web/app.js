@@ -7,7 +7,7 @@ const css = (name) => getComputedStyle(document.documentElement).getPropertyValu
 const S = {
   page: "today", state: null, method: null, data: null, days: 30, reviews: [], contents: [], comments: null,
   openJob: null, jobLog: "", commentTab: "todo", editing: null, editRule: null, bench: null, benchDays: 30, benchCands: null, benchTab: "hits",
-  form: { kind: "video", files: "", cover: "", cover_sec: "", cover_focus: [0.5, 0.4], cover_mode: "auto", title: "", desc: "", tags: "", schedule: "", headless: false, targets: {}, drafts: {}, content_id: null },
+  form: { kind: "video", files: "", cover: "", cover_sec: "", cover_focus: [0.5, 0.4], cover_wide: "", cover_focus2: [0.5, 0.5], cover_mode: "auto", title: "", desc: "", tags: "", schedule: "", headless: false, targets: {}, drafts: {}, content_id: null },
   coverPreview: null,
 };
 
@@ -591,14 +591,18 @@ const MODE_NAME = { crop: "裁剪", pad: "完整画面 + 模糊背景" };
 function coverSection(f) {
   const P = S.coverPreview;
   const preview = P ? `<div class="cover-prev"><div><div class="hint">原图 ${P.source.w}×${P.source.h}（${esc(P.origin)}）。<b>点一下画面里最重要的位置</b>，裁剪会以它为中心</div>
-      <div class="focus-wrap" data-act="cover-focus"><img src="${P.source.url}"><span class="focus-dot" style="left:${P.focus[0] * 100}%;top:${P.focus[1] * 100}%"></span></div></div>
-    <div class="cover-outs">${P.items.map((it) => `<div><img src="${it.url}" style="aspect-ratio:${it.w}/${it.h}"><div class="hint">${pfDot(it.platform)}${esc(it.name)} · ${esc(it.label)}<br>${it.w}×${it.h} · ${MODE_NAME[it.mode]}${it.mode === "crop" ? `，保留 ${Math.round(it.keep * 100)}% 画面` : ""}</div></div>`).join("")}</div></div>` : "";
+      <div class="focus-wrap" data-act="cover-focus" data-which="cover_focus"><img src="${P.source.url}"><span class="focus-dot" style="left:${P.focus[0] * 100}%;top:${P.focus[1] * 100}%"></span></div>
+      ${P.source2 ? `<div class="hint" style="margin-top:10px">横版原图 ${P.source2.w}×${P.source2.h}（${esc(P.source2.name)}），同样可以点一下定焦点</div>
+      <div class="focus-wrap" data-act="cover-focus" data-which="cover_focus2"><img src="${P.source2.url}"><span class="focus-dot" style="left:${P.focus2[0] * 100}%;top:${P.focus2[1] * 100}%"></span></div>` : ""}</div>
+    <div class="cover-outs">${P.items.map((it) => `<div><img src="${it.url}" style="aspect-ratio:${it.w}/${it.h}"><div class="hint">${pfDot(it.platform)}${esc(it.name)} · ${esc(it.label)}<br>${it.w}×${it.h} · ${MODE_NAME[it.mode]}${it.mode === "crop" ? `，保留 ${Math.round(it.keep * 100)}% 画面` : ""}${P.source2 ? "<br>来自" + it.from : ""}</div></div>`).join("")}</div></div>` : "";
   return `<div class="field"><span>封面（可选）：一张原图，按每个平台的规格各生成一份，尺寸精确匹配</span>
     <div class="row"><div class="grow"><input data-f="cover" value="${esc(f.cover)}" placeholder="封面图的完整路径"></div><button data-act="pick" data-kind="image" data-to="cover">选择图片</button></div>
+    <div class="row" style="margin-top:8px"><div class="grow"><input data-f="cover_wide" value="${esc(f.cover_wide)}" placeholder="可选：单独的横版封面图（视频号 4:3 那张）。不填就用上面这张生成"></div><button data-act="pick" data-kind="image" data-to="cover_wide">选择图片</button></div>
     <div class="row" style="margin-top:8px;white-space:nowrap"><span class="hint">没有封面图时，从视频第</span><input data-f="cover_sec" value="${esc(f.cover_sec)}" style="width:64px" placeholder="秒"><span class="hint">秒截一帧</span></div>
     <div class="row" style="margin-top:8px"><select data-f="cover_mode" class="grow">${[["auto", "自动（裁掉太多就用模糊背景）"], ["crop", "总是裁剪"], ["pad", "总是完整画面 + 模糊背景"]].map(([v, t]) => `<option value="${v}" ${f.cover_mode === v ? "selected" : ""}>${t}</option>`).join("")}</select>
       <button data-act="cover-preview" style="white-space:nowrap">预览各平台封面</button></div>${preview}
-    <p class="hint">抖音竖封面 3:4（1080×1440）；视频号个人主页卡片 3:4 和动态封面 4:3（1440×1080）；小红书默认 3:4，可在设置里改。不预览也可以，发布时会自动按这些规格生成。</p></div>`;
+    <p class="hint">抖音竖封面 3:4（1080×1440）；小红书默认 3:4，可在设置里改。<b>视频号有两个封面位</b>：个人主页卡片 3:4（主页里的缩略图）和动态封面 4:3（1440×1080，横版）。
+      两张的构图差别大，标题字和人脸尽量放在画面中间；想分别设计就在上面单独填一张横版图。不预览也可以，发布时会自动按这些规格生成。</p></div>`;
 }
 function jobsTable(list, empty) {
   if (!list.length) return `<div class="sub">${empty}</div>`;
@@ -760,7 +764,7 @@ async function refresh() {
 async function coverPreview() {
   const f = S.form;
   const platforms = Object.keys(f.targets).filter((k) => f.targets[k]).map((k) => k.split("/")[0]);
-  S.coverPreview = await api("/api/cover/preview", { cover: f.cover, files: f.files.split("\n"), cover_sec: f.cover_sec, cover_focus: f.cover_focus, cover_mode: f.cover_mode,
+  S.coverPreview = await api("/api/cover/preview", { cover: f.cover, files: f.files.split("\n"), cover_sec: f.cover_sec, cover_focus: f.cover_focus, cover_wide: f.cover_wide, cover_focus2: f.cover_focus2, cover_mode: f.cover_mode,
     platforms: platforms.length ? [...new Set(platforms)] : null });
   render();
 }
@@ -806,13 +810,13 @@ const ACTIONS = {
     const targets = Object.keys(f.targets).filter((k) => f.targets[k]).map((k) => { const [platform, ...rest] = k.split("/"); return { platform, account: rest.join("/"), draft: !!f.drafts[k] }; });
     const names = targets.map((t) => `${pfName(t.platform)}「${t.account}」${t.draft ? "（存草稿）" : ""}`).join("、");
     if (targets.length && !confirm(`确认${f.schedule ? "定时 " + f.schedule.replace("T", " ") + " " : "立即"}发布到：${names}？`)) return;
-    await api("/api/publish", { kind: f.kind, files: f.files.split("\n"), cover: f.cover, cover_sec: f.cover_sec, cover_focus: f.cover_focus, cover_mode: f.cover_mode, title: f.title, desc: f.desc, tags: f.tags, schedule: f.schedule, headless: f.headless, targets, content_id: f.content_id });
+    await api("/api/publish", { kind: f.kind, files: f.files.split("\n"), cover: f.cover, cover_sec: f.cover_sec, cover_focus: f.cover_focus, cover_wide: f.cover_wide, cover_focus2: f.cover_focus2, cover_mode: f.cover_mode, title: f.title, desc: f.desc, tags: f.tags, schedule: f.schedule, headless: f.headless, targets, content_id: f.content_id });
     toast("已加入发布队列"); await refresh();
   },
   "cover-preview": async () => { await coverPreview(); },
   "cover-focus": async (el, e) => {
     const r = el.querySelector("img").getBoundingClientRect();
-    S.form.cover_focus = [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
+    S.form[el.dataset.which || "cover_focus"] = [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
     await coverPreview();
   },
   "publish-unlink": () => { S.form.content_id = null; render(); },
@@ -1007,7 +1011,7 @@ document.addEventListener("click", (e) => {
 document.addEventListener("input", (e) => {
   const t = e.target;
   if (t.dataset.f) S.form[t.dataset.f] = t.type === "checkbox" ? t.checked : t.value;
-  if (["cover", "files", "cover_sec"].includes(t.dataset.f)) S.coverPreview = null;  // 来源变了，旧预览作废
+  if (["cover", "files", "cover_sec", "cover_wide"].includes(t.dataset.f)) S.coverPreview = null;  // 来源变了，旧预览作废
   if (t.dataset.target) S.form.targets[t.dataset.target] = t.checked;
   if (t.dataset.draft) S.form.drafts[t.dataset.draft] = t.checked;
 });

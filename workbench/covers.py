@@ -16,7 +16,8 @@ from . import config
 # 平台 -> [(发布引擎的参数名, 说明, 宽, 高)]
 SPECS = {
     "douyin": [("portrait", "竖封面 3:4", 1080, 1440)],
-    "channels": [("portrait", "个人主页卡片 3:4", 1080, 1440), ("landscape", "动态封面 4:3", 1440, 1080)],
+    # 视频号发表页有两个封面位：竖的是个人主页作品列表里的缩略图，横的是视频号动态里显示的那张
+    "channels": [("portrait", "个人主页卡片 3:4（主页缩略图）", 1080, 1440), ("landscape", "动态封面 4:3（横版）", 1440, 1080)],
     "xhs": [("thumbnail", "封面", 1080, 1440)],
 }
 XHS_RATIOS = {"3:4": (1080, 1440), "1:1": (1080, 1080), "4:3": (1440, 1080), "9:16": (1080, 1920)}
@@ -135,10 +136,11 @@ def write_jpg(path, img):
     buf.tofile(str(path))
 
 
-def build(image=None, video=None, sec=None, focus=(0.5, 0.4), mode="auto", platforms=None):
+def build(image=None, video=None, sec=None, focus=(0.5, 0.4), mode="auto", platforms=None, landscape_image=None, landscape_focus=(0.5, 0.5)):
     """按规格生成封面文件。返回 {"dir", "source": {...}, "items": [{platform, slot, label, w, h, path, mode, keep}]}。
 
     image 优先；没有 image 就从 video 的第 sec 秒截一帧。生成后把文件读回来核对尺寸，不对就报错。
+    landscape_image：单独给横版封面（视频号 4:3 那张）准备的图。给了就只用它出横版，竖版仍用 image。
     """
     mode = mode if mode in MODES else "auto"
     focus = (float(focus[0]), float(focus[1]))
@@ -150,28 +152,40 @@ def build(image=None, video=None, sec=None, focus=(0.5, 0.4), mode="auto", platf
         stamp = Path(video).stat().st_mtime_ns
     else:
         raise CoverError("没有封面来源：请选一张封面图，或填从视频第几秒截取")
+    wide = read_image(landscape_image) if landscape_image else None
+    landscape_focus = (float(landscape_focus[0]), float(landscape_focus[1]))
     platforms = [p for p in (platforms or list(SPECS)) if p in SPECS]
     wanted = [(pf, *spec) for pf in platforms for spec in specs(pf)]
-    key = hashlib.md5(repr((str(image), str(video), sec, focus, mode, stamp, wanted)).encode()).hexdigest()[:12]
+    stamp2 = Path(landscape_image).stat().st_mtime_ns if landscape_image else 0
+    key = hashlib.md5(repr((str(image), str(video), sec, focus, mode, stamp, wanted, str(landscape_image), landscape_focus, stamp2)).encode()).hexdigest()[:12]
     out = config.DATA / "covers" / key
     out.mkdir(parents=True, exist_ok=True)
     ih, iw = img.shape[:2]
     cv2, _ = libs()
     preview = img if max(iw, ih) <= 900 else cv2.resize(img, (int(iw * 900 / max(iw, ih)), int(ih * 900 / max(iw, ih))), interpolation=cv2.INTER_AREA)
     write_jpg(out / "source.jpg", preview)
+    source2 = None
+    if wide is not None:
+        wh, ww = wide.shape[:2]
+        small = wide if max(ww, wh) <= 900 else cv2.resize(wide, (int(ww * 900 / max(ww, wh)), int(wh * 900 / max(ww, wh))), interpolation=cv2.INTER_AREA)
+        write_jpg(out / "source2.jpg", small)
+        source2 = {"w": ww, "h": wh, "name": Path(landscape_image).name}
     items, done = [], {}
     for pf, slot, label, w, h in wanted:
         if (w, h) not in done:
-            result, used, keep = render(img, w, h, focus, mode)
+            own = wide is not None and w > h   # 横版封面有单独的图就用它
+            result, used, keep = render(wide if own else img, w, h, landscape_focus if own else focus, mode)
             path = out / f"cover_{w}x{h}.jpg"
             write_jpg(path, result)
             check = read_image(path)
             if check.shape[1] != w or check.shape[0] != h:
                 raise CoverError(f"生成的封面尺寸不对：要 {w}×{h}，实际 {check.shape[1]}×{check.shape[0]}")
-            done[(w, h)] = (path, used, keep)
-        path, used, keep = done[(w, h)]
-        items.append({"platform": pf, "slot": slot, "label": label, "w": w, "h": h, "path": str(path), "mode": used, "keep": round(keep, 3)})
-    return {"dir": key, "origin": origin, "source": {"w": iw, "h": ih}, "focus": list(focus), "items": items}
+            done[(w, h)] = (path, used, keep, own)
+        path, used, keep, own = done[(w, h)]
+        items.append({"platform": pf, "slot": slot, "label": label, "w": w, "h": h, "path": str(path), "mode": used, "keep": round(keep, 3),
+                      "from": "横版原图" if own else "原图"})
+    return {"dir": key, "origin": origin, "source": {"w": iw, "h": ih}, "focus": list(focus), "items": items,
+            "source2": source2, "focus2": list(landscape_focus)}
 
 
 def for_platform(result, platform):

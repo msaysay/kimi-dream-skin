@@ -107,7 +107,8 @@ def api_post(con, worker, path, body):
             try:  # 一张原图按每个平台的规格各生成一份
                 made = covers.build(cover or None, files[0] if files else None, body.get("cover_sec") if not cover else None,
                                     body.get("cover_focus") or (0.5, 0.4), body.get("cover_mode") or "auto",
-                                    sorted({t.get("platform") for t in targets if t.get("platform") in config.PLATFORMS}))
+                                    sorted({t.get("platform") for t in targets if t.get("platform") in config.PLATFORMS}),
+                                    (body.get("cover_wide") or "").strip().strip('"') or None, body.get("cover_focus2") or (0.5, 0.5))
             except (covers.CoverError, ValueError, TypeError) as e:
                 raise ApiError(f"封面：{e}")
         queued = []
@@ -150,13 +151,16 @@ def api_post(con, worker, path, body):
         video = ((body.get("files") or [""])[0] or "").strip().strip('"')
         try:
             r = covers.build(image or None, video or None, body.get("cover_sec") if not image else None,
-                             body.get("cover_focus") or (0.5, 0.4), body.get("cover_mode") or "auto", body.get("platforms") or None)
+                             body.get("cover_focus") or (0.5, 0.4), body.get("cover_mode") or "auto", body.get("platforms") or None,
+                             (body.get("cover_wide") or "").strip().strip('"') or None, body.get("cover_focus2") or (0.5, 0.5))
         except (covers.CoverError, ValueError, TypeError) as e:
             raise ApiError(str(e))
         for it in r["items"]:
             it["url"] = f"/api/cover/file?d={r['dir']}&f={Path(it['path']).name}"
             it["name"] = config.PLATFORMS[it["platform"]]["name"]
         r["source"]["url"] = f"/api/cover/file?d={r['dir']}&f=source.jpg"
+        if r["source2"]:
+            r["source2"]["url"] = f"/api/cover/file?d={r['dir']}&f=source2.jpg"
         return r
     if path == "/api/pick":
         kind = body.get("kind") if body.get("kind") in ("image", "xlsx") else "video"
