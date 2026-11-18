@@ -21,6 +21,7 @@ SNAPSHOT_COLS = [c for c in db.SNAP_COLS]
 @pytest.fixture()
 def con():
     shutil.rmtree(config.DATA, ignore_errors=True)
+    config.save_settings({"ai_runner": "off"})  # 不去调用这台电脑上真实的 AI 助手
     c = db.connect()
     yield c
     c.close()
@@ -614,7 +615,7 @@ def test_agent_api(api, con):
     assert status == 200 and len(body["tasks"]) == 1
     tid = body["tasks"][0]
     state = api("/api/state")[1]
-    assert state["agent_pending"] == [{"id": tid, "kind": "script", "ref": str(cid)}] and state["agent_api"] is False
+    assert state["agent_pending"] == [{"id": tid, "kind": "script", "ref": str(cid), "running": False}] and state["agent_api"] is False
     assert api("/api/agent")[1]["pending"][0]["label"] == "出稿：网页上点出稿"
     assert "输出格式" in api(f"/api/agent/{tid}/brief")[1]["brief"]
     assert api("/api/agent/submit", {"id": tid, "text": "随便写了几句，没有按格式来"})[0] == 400
@@ -817,3 +818,78 @@ def test_channels_gets_two_covers_and_can_use_a_separate_wide_image(con, tmp_pat
     assert by[("channels", "portrait")]["from"] == "原图" and by[("douyin", "portrait")]["from"] == "原图"
     assert r["source2"]["w"] == 1200
     assert jobs.COVER_SKIPPED.search("WARNING 😵 3:4 竖版封面设置失败，这次先跳过: timeout") and not jobs.COVER_SKIPPED.search("🥳 4:3 横版封面已经设置完成")
+
+
+# ---------- 工作台直连本机的 AI 助手 ----------
+def use_fake_ai(tmp_path):
+    import sys
+    script = tmp_path / "script.md"
+    script.write_text(GOOD_SCRIPT, encoding="utf-8")
+    fake = Path(__file__).resolve().parent / "fake_ai.py"
+    config.save_settings({"ai_runner": "custom", "ai_runner_cmd": f'"{sys.executable}" "{fake}" "{script}"'})
+
+
+def test_runner_picks_installed_assistant(con, monkeypatch):
+    from workbench import agent, runner
+    monkeypatch.setattr(runner.shutil, "which", lambda b: "/usr/bin/codex" if b == "codex" else None)
+    config.save_settings({"ai_runner": "auto"})
+    assert runner.chosen() == ("codex", "Codex") and agent.auto_name() == "Codex"
+    cmd = runner.command("codex", "/tmp/out.md")
+    assert cmd[:2] == ["/usr/bin/codex", "exec"] and cmd[-1] == "-" and "/tmp/out.md" in cmd  # 任务从标准输入进，结果写文件
+    config.save_settings({"ai_runner": "claude"})
+    assert runner.chosen() == (None, None) and agent.auto_name() is None  # 指定的没装：退回到等助手来领
+    config.save_settings({"ai_runner": "off"})
+    assert agent.auto_name() is None
+
+
+def test_review_runs_on_local_assistant_without_pasting(con, tmp_path):
+    from workbench import agent, jobs, review
+    demo.load_demo(con)
+    use_fake_ai(tmp_path)
+    assert agent.auto_name() == "自定义命令"
+    rid = agent.create(con, "review", "r-auto", {"days": 0})
+    assert "直接输出结果全文" in agent.brief(con, rid, direct=True) and "ning agent submit" not in agent.brief(con, rid, direct=True)
+    job_id = jobs.enqueue(con, "agent_auto", {"tasks": [rid]})
+    w = jobs.Worker(ai=True)
+    assert w.run_job(con, db.rows(con, "SELECT * FROM jobs WHERE id=?", job_id)[0])
+    assert agent.pending(con) == []
+    saved = db.rows(con, "SELECT kind, content FROM reviews ORDER BY id DESC LIMIT 1")[0]
+    assert saved["kind"] == "ai" and "下周做成系列" in saved["content"]
+    log = db.rows(con, "SELECT log FROM jobs WHERE id=?", job_id)[0]["log"]
+    assert "交给 自定义命令 处理" in log and "复盘已保存" in log
+
+
+def test_local_assistant_gets_one_retry_and_preamble_is_ignored(con, tikhub_site, tmp_path):
+    from workbench import agent, benchmarks
+    benchmarks.add(con, "douyin", "MS4wX", "抖音对标")
+    benchmarks.refresh(con, log=lambda m: None)
+    use_fake_ai(tmp_path)
+    bid = agent.create(con, "bench", "douyin|dy2")
+    logs = []
+    note = agent.run_auto(con, bid, log=logs.append)
+    assert note == "拆解已保存" and any("让它改一次" in m for m in logs)
+    cid = contents.save(con, {"title": "直连出稿"})
+    sid = agent.create(con, "script", cid)
+    assert "稿子已写进" in agent.run_auto(con, sid)  # 前面多了一句「好的，下面是稿子」也能读
+
+
+def test_jobs_split_into_two_queues(con):
+    from workbench import jobs
+    a = jobs.enqueue(con, "agent_auto", {"tasks": []})
+    b = jobs.enqueue(con, "review", {"days": 7})
+    pick = lambda w: db.rows(con, f"SELECT id FROM jobs WHERE status='pending' AND {w.where[0]} ORDER BY id", *w.where[1])
+    assert [r["id"] for r in pick(jobs.Worker())] == [b] and [r["id"] for r in pick(jobs.Worker(ai=True))] == [a]
+
+
+def test_agent_run_api(api, con, tmp_path):
+    cid = contents.save(con, {"title": "网页上点出稿"})
+    tid = api("/api/contents/ai", {"ids": [cid]})[1]["tasks"][0]
+    assert api("/api/agent/run", {"ids": [tid]})[0] == 400  # 没有可用的 AI
+    use_fake_ai(tmp_path)
+    state = api("/api/state")[1]
+    assert state["agent_auto"] == "自定义命令"
+    job = api("/api/agent/run", {"ids": [tid]})[1]["job"]
+    assert job and api("/api/agent/run", {"ids": [tid]})[1]["job"] is None  # 已经在排队的不重复排
+    assert api("/api/state")[1]["agent_pending"][0]["running"] is True
+    assert api("/api/ai/test", {"runner": "custom"})[1]["reply"] == "好的"
+    assert "found" in api("/api/ai/runners")[1]

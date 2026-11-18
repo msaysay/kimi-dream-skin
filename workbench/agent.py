@@ -6,7 +6,8 @@
     ning agent brief <编号>    打印完整任务说明（含输出格式）
     ning agent submit <编号>   读 data/agent/task-<编号>.md，校验后写回
     ning agent new "选题"      直接给一个选题出稿（建内容 + 打印说明，一步）
-如果在「设置 → 高级」里配了模型接口，工作台也能自己处理这些待办（可选）。
+工作台也能自己处理这些待办：本机装了 Claude Code / Codex / CodeBuddy 并登录过，就直接调用它们（见 runner.py），
+用的是你自己在这些产品里的额度；或者在「设置 → AI → 高级」里配一个模型接口。
 """
 import json
 import re
@@ -63,7 +64,7 @@ def pending(con):
     return out
 
 
-def brief(con, task_id):
+def brief(con, task_id, direct=False):
     t = get(con, task_id)
     p = json.loads(t["params"] or "{}")
     if t["kind"] == "script":
@@ -85,6 +86,8 @@ def brief(con, task_id):
         text = ("# 任务：把本周的选题方向写成具体可拍的标题\n\n结构已经由数据决定，不许改。每条写一个 30 字以内的选题标题，符合账号定位、兑现开头钩。\n\n"
                 + method.profile_text(method.load_profile()) + "\n\n" + json.dumps(brief_items, ensure_ascii=False, indent=1)
                 + "\n\n## 输出格式\n每行一条：`编号｜标题`，不要别的内容。")
+    if direct:  # 工作台直接调用助手：结果直接输出，由工作台保存
+        return text + "\n\n---\n直接输出结果全文（按上面的输出格式），不要解释，不要调用工具，不要写文件。"
     path = task_file(task_id)
     return (f"{text}\n\n---\n写完后把结果存成 UTF-8 文件：{path}\n然后运行：ning agent submit {task_id}\n"
             "（程序会校验格式；报错就按提示改了再交。）")
@@ -102,7 +105,7 @@ def front_matter(text):
     text = text.strip()
     text = re.sub(r"^```\w*\s*\n", "", text)
     text = re.sub(r"\n```\s*$", "", text)
-    m = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", text, re.S)
+    m = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", text, re.S) or re.search(r"(?m)^---\s*\n(.*?)\n---\s*\n?(.*)$", text, re.S)
     if not m:
         return {}, text
     meta = {}
@@ -202,13 +205,40 @@ def submit(con, task_id, text):
     return note
 
 
-def run_with_api(con, task_id):
-    """配了模型接口时，工作台自己处理一条待办（可选的后备路径）。"""
-    from . import review
-    text = review.chat([{"role": "user", "content": brief(con, task_id)}])
-    return submit(con, task_id, text)
-
-
 def api_ready():
     s = config.load_settings()
     return bool(s["ai_api_key"] and s["ai_model"] and s["ai_base_url"])
+
+
+def auto_name():
+    """工作台能自己处理待办时，返回由谁处理（「Claude Code」「模型接口」……）；只能等助手来领时返回 None。"""
+    from . import runner
+    key, name = runner.chosen()
+    if key:
+        return name
+    return "模型接口" if api_ready() else None
+
+
+def run_auto(con, task_id, log=print, on_proc=None):
+    """工作台自己处理一条待办：优先调用本机的 AI 助手，其次用配置的模型接口。格式不对时把报错发回去，让它改一次。"""
+    from . import review, runner
+    t = get(con, task_id)
+    if t["status"] != "pending":
+        return f"待办 {task_id} 已经处理过了"
+    key, name = runner.chosen()
+    if key:
+        ask = lambda prompt: runner.run(prompt, key, on_proc=on_proc)
+    elif api_ready():
+        name = "模型接口"
+        ask = lambda prompt: review.chat([{"role": "user", "content": prompt}])
+    else:
+        raise RuntimeError("没有可用的 AI：本机没找到 Claude Code / Codex / CodeBuddy，也没配模型接口")
+    prompt = brief(con, task_id, direct=True)
+    log(f"交给 {name} 处理：{label(con, t)}（一般要 1–3 分钟）")
+    text = ask(prompt)
+    try:
+        return submit(con, task_id, text)
+    except ValueError as e:
+        log(f"格式不对，让它改一次：{e}")
+        text = ask(prompt + f"\n\n---\n你上一次的结果没有通过检查：{e}\n请按输出格式重新输出完整结果。上一次的结果是：\n\n{text}")
+        return submit(con, task_id, text)

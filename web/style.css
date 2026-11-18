@@ -164,3 +164,11 @@ details summary { cursor: pointer; margin: 6px 0 10px; }
   .grid.k4, .grid.k3, .grid.k2 { grid-template-columns: 1fr 1fr; }
   .table-wrap { overflow-x: auto; }
 }
+
+.spin { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+details.card > summary { cursor: pointer; }
+.md .md-table { overflow-x: auto; margin: 8px 0 14px; }
+.md .md-table table { font-size: 13px; }
+.md .md-table th { white-space: nowrap; }
+.md blockquote { margin: 6px 0; padding: 4px 12px; border-left: 3px solid var(--line, #ddd); color: var(--muted, #666); }

@@ -1,4 +1,5 @@
 """任务队列：登录、检查登录、发布、采集、复盘都排队，一次只跑一个（浏览器自动化不适合并行）。
+交给 AI 处理的待办（agent_auto）走另一条队列，写稿、写复盘的几分钟里不耽误发布和采集。
 
 登录和发布交给 social-auto-upload 的命令行；采集在单独的进程里跑，浏览器出问题不会拖垮工作台。
 """
@@ -13,6 +14,7 @@ import time
 
 from . import agent, config, contents, db, method, planner, review
 
+AI_TYPES = ("agent_auto",)
 ENV = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
 
 
@@ -71,8 +73,11 @@ def action_for(p):
 
 
 class Worker(threading.Thread):
-    def __init__(self):
+    def __init__(self, ai=False):
         super().__init__(daemon=True)
+        self.ai = ai  # True：只处理 AI 待办；False：处理其余所有任务
+        marks = ",".join("?" * len(AI_TYPES))
+        self.where = (f"type IN ({marks})" if ai else f"type NOT IN ({marks})", AI_TYPES)
         self.proc = None
         self.current = None
         self.cancelled = set()
@@ -151,10 +156,20 @@ class Worker(threading.Thread):
             from . import benchmarks
             ok, new = benchmarks.refresh(con, p.get("bench_id"), log=lambda m: self.log(con, job_id, m))
             return ok > 0
-        if kind == "agent_auto":  # 配了模型接口时，工作台自己处理 AI 待办
+        if kind == "agent_auto":  # 工作台自己处理 AI 待办：调用本机的 AI 助手或配置的模型接口
+            ok = True
             for task_id in p["tasks"]:
-                self.log(con, job_id, agent.run_with_api(con, task_id))
-            return True
+                if job_id in self.cancelled:
+                    return False
+                try:
+                    self.log(con, job_id, "✓ " + agent.run_auto(con, task_id, log=lambda m: self.log(con, job_id, m),
+                                                                on_proc=lambda pr: setattr(self, "proc", pr)))
+                except Exception as e:  # 一条失败不影响后面的；待办留着，可以再试或交给助手手动处理
+                    ok = False
+                    self.log(con, job_id, f"✗ 待办 #{task_id} 没处理成：{e}")
+                finally:
+                    self.proc = None
+            return ok
         if kind in ("comments", "comment_send"):
             action = "comments" if kind == "comments" else "send-comments"
             code = self.spawn(con, job_id, [sys.executable, "-m", "workbench", action, "--platform", p["platform"], "--account", p["account"]],
@@ -183,12 +198,15 @@ class Worker(threading.Thread):
 
     def run(self):
         con = db.connect()
+        where, args = self.where
         with con:  # 上次没跑完就关掉的任务标成中断
-            con.execute("UPDATE jobs SET status='failed', log = log || '工作台关闭，任务中断\n', finished_at=? WHERE status='running'", (now_ms(),))
+            con.execute(f"UPDATE jobs SET status='failed', log = log || '工作台关闭，任务中断\n', finished_at=? WHERE status='running' AND {where}",
+                        (now_ms(), *args))
         while True:
             try:
-                self.auto_collect(con)
-                job = (db.rows(con, "SELECT * FROM jobs WHERE status='pending' ORDER BY id LIMIT 1") or [None])[0]
+                if not self.ai:
+                    self.auto_collect(con)
+                job = (db.rows(con, f"SELECT * FROM jobs WHERE status='pending' AND {where} ORDER BY id LIMIT 1", *args) or [None])[0]
                 if job is None:
                     time.sleep(1)
                     continue
@@ -207,3 +225,21 @@ class Worker(threading.Thread):
             except Exception as e:  # 队列本身不能因为一次异常停掉
                 print("任务队列出错：", e, file=sys.stderr)
                 time.sleep(3)
+
+
+class Workers:
+    """两条队列：浏览器任务一条，AI 待办一条。对外看起来像一个 Worker。"""
+    def __init__(self):
+        self.main, self.ai = Worker(), Worker(ai=True)
+
+    def start(self):
+        self.main.start()
+        self.ai.start()
+
+    @property
+    def current(self):
+        return self.main.current
+
+    def cancel(self, job_id):
+        self.main.cancel(job_id)
+        self.ai.cancel(job_id)

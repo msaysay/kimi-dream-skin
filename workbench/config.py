@@ -25,6 +25,9 @@ DEFAULT_SETTINGS = {
     "auto_collect": True,    # 工作台开着时每天自动采集一次
     "collect_hour": 9,
     "max_posts": 30,         # 每个账号每次最多抓多少条作品的详情
+    # AI 待办由谁处理：auto 自动找本机的 Claude Code / Codex / CodeBuddy；也可以指定其中一个、custom 用自定义命令、off 只等助手来领
+    "ai_runner": "auto",
+    "ai_runner_cmd": "",
     "ai_base_url": "https://api.moonshot.cn/v1",
     "ai_api_key": "",
     "ai_model": "",

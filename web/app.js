@@ -64,23 +64,36 @@ function jobTitle(j) {
 const aiReady = () => true;
 const ASK = "处理 NingLoop 的 AI 待办";
 const pendingFor = (kind, ref) => (S.state.agent_pending || []).find((t) => t.kind === kind && String(t.ref) === String(ref));
+const manualTools = (id) => `<button class="small" data-act="agent-copy" data-id="${id}">复制任务说明（发给任何 AI 都行）</button>
+    <button class="small" data-act="agent-paste" data-id="${id}">粘贴 AI 的结果</button>`;
+const handedTo = () => S.state.agent_auto ? `已交给 ${S.state.agent_auto}` : `已排进 AI 待办：在 AI 助手里说「${ASK}」`;
 function agentHint(task) {
   if (!task) return "";
-  if (S.state.agent_api) return `<div class="banner">已交给配置的模型接口处理（待办 #${task.id}），好了会自动填进来。</div>`;
+  const who = S.state.agent_auto;
+  if (who && task.running) return `<div class="banner ai"><span class="spin"></span>正在交给你电脑上的 <b>${esc(who)}</b> 处理（待办 #${task.id}），写好会自动填进来，一般 1–3 分钟。用的是你自己在 ${esc(who)} 里的额度。
+    <details style="margin-top:6px"><summary class="hint">等不及或者想换个 AI？</summary><div class="row" style="margin-top:6px">${manualTools(task.id)}</div></details></div>`;
+  if (who) return `<div class="banner ai">待办 #${task.id} 还没处理成（可以到「任务」页看原因）。
+    <div class="row" style="margin-top:8px"><button class="small primary" data-act="agent-run" data-id="${task.id}">让 ${esc(who)} 再试一次</button>${manualTools(task.id)}</div></div>`;
   return `<div class="banner ai">已排进 AI 待办 #${task.id}。在 Claude Code / Codex / WorkBuddy 里打开 NingLoop 文件夹，说「<b>${ASK}</b>」，写好会自动填进来。
-    <div class="row" style="margin-top:8px"><button class="small" data-act="copy-ask">复制这句话</button>
-    <button class="small" data-act="agent-copy" data-id="${task.id}">复制任务说明（发给任何 AI 都行）</button>
-    <button class="small" data-act="agent-paste" data-id="${task.id}">粘贴 AI 的结果</button></div></div>`;
+    <div class="hint" style="margin-top:4px">想省掉这一步：装好 Claude Code、Codex 或 CodeBuddy 命令行并登录一次，工作台就能直接调用它，见「设置 → AI」。</div>
+    <div class="row" style="margin-top:8px"><button class="small" data-act="copy-ask">复制这句话</button>${manualTools(task.id)}</div></div>`;
 }
 
 // ---------- 极简 Markdown ----------
 function md(text) {
   const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
   let html = "", list = null;
-  const close = () => { if (list) { html += `</${list}>`; list = null; } };
+  const close = () => { if (list) { html += list === "table" ? "</tbody></table></div>" : `</${list}>`; list = null; } };
+  const cells = (row) => row.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
   for (const line of (text || "").split("\n")) {
     let m;
-    if ((m = line.match(/^(#{1,4})\s+(.*)/))) { close(); html += `<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`; }
+    if (/^\s*\|.*\|\s*$/.test(line)) {  // 表格行
+      if (/^\s*\|[\s:|-]+\|\s*$/.test(line)) continue;  // 表头下面的分隔行
+      if (list !== "table") { close(); html += `<div class="md-table"><table><thead><tr>${cells(line).map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>`; list = "table"; }
+      else html += `<tr>${cells(line).map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`;
+    }
+    else if ((m = line.match(/^(#{1,4})\s+(.*)/))) { close(); html += `<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`; }
+    else if ((m = line.match(/^\s*>\s?(.*)/))) { close(); html += `<blockquote>${inline(m[1])}</blockquote>`; }
     else if ((m = line.match(/^\s*[-*]\s+(.*)/))) { if (list !== "ul") { close(); html += "<ul>"; list = "ul"; } html += `<li>${inline(m[1])}</li>`; }
     else if ((m = line.match(/^\s*\d+[.、]\s*(.*)/))) { if (list !== "ol") { close(); html += "<ol>"; list = "ol"; } html += `<li>${inline(m[1])}</li>`; }
     else if (/^-{3,}$/.test(line.trim())) { close(); html += "<hr>"; }
@@ -643,15 +656,22 @@ function accountsTable() {
 function agentPage() {
   const A = S.agent;
   if (!A) return `<div class="card sub">加载中…</div>`;
-  return `<div class="head"><h1>AI 待办</h1><span class="sub">出稿、AI 复盘、对标拆解都在这里排队，由你正在用的 AI 助手来做</span></div>
-  <div class="card"><h2>怎么让 AI 助手处理</h2>
+  const who = A.auto;
+  const auto = who ? `<div class="card"><h2>由你电脑上的 ${esc(who)} 直接处理</h2>
+    <p>点了「出稿」「AI 复盘」「拆解」，工作台会直接调用 ${esc(who)}，写好自动填回来，<b>不用复制粘贴</b>。用的是你自己在 ${esc(who)} 里的账号和额度。
+      AI 在单独的队列里跑，不耽误发布和采集。换一个助手或者想测试一下，到「设置 → AI」。</p>
+    ${A.pending.some((t) => !t.running) ? `<div class="row"><button class="primary" data-act="agent-run-all">把没处理的 ${A.pending.filter((t) => !t.running).length} 条都交给 ${esc(who)}</button></div>` : ""}</div>` : "";
+  return `<div class="head"><h1>AI 待办</h1><span class="sub">出稿、AI 复盘、对标拆解都在这里排队${who ? `，由 ${esc(who)} 直接处理` : "，由你正在用的 AI 助手来做"}</span></div>
+  ${auto}
+  <${who ? 'details class="card"><summary><b>也可以在 AI 助手里手动处理</b></summary>' : 'div class="card"><h2>怎么让 AI 助手处理</h2>'}
     <ol class="steps"><li>在 Claude Code、Codex 或 WorkBuddy 里打开 NingLoop 所在的文件夹（它们会读到文件夹里的 AGENTS.md / CLAUDE.md，知道怎么做）。</li>
       <li>说一句「<b>${ASK}</b>」。想直接写一条新选题，就说「用 NingLoop 写个脚本：你的选题」。</li>
       <li>它写完会自动交回来，稿子出现在「创作」里对应的选题上，复盘出现在「复盘」页。</li></ol>
-    <div class="row"><button class="primary" data-act="copy-ask">复制这句话</button><span class="hint">用网页版聊天的 AI 也行：点下面的「复制任务说明」发给它，再把它的回答「粘贴结果」交回来。</span></div></div>
+    <div class="row"><button class="${who ? "" : "primary"}" data-act="copy-ask">复制这句话</button><span class="hint">用网页版聊天的 AI 也行：点下面的「复制任务说明」发给它，再把它的回答「粘贴结果」交回来。</span></div>
+    ${who ? "" : `<p class="hint" style="margin-top:10px">想省掉这一步：电脑上装好 Claude Code、Codex 或 CodeBuddy 的命令行并登录一次，工作台就能直接调用它们，见「设置 → AI」。</p>`}</${who ? "details" : "div"}>
   <div class="card"><h2>待处理 ${A.pending.length ? A.pending.length + " 条" : ""}</h2>
-    ${A.pending.length ? `<table><tbody>${A.pending.map((t) => `<tr><td style="width:60px" class="sub">#${t.id}</td><td>${esc(t.label)}</td><td class="sub" style="width:110px">${dt(t.created_at)}</td>
-      <td style="text-align:right;white-space:nowrap"><button class="small" data-act="agent-copy" data-id="${t.id}">复制任务说明</button>
+    ${A.pending.length ? `<table><tbody>${A.pending.map((t) => `<tr><td style="width:60px" class="sub">#${t.id}</td><td>${esc(t.label)}${t.running ? `<div class="hint"><span class="spin"></span>${esc(who)} 正在处理</div>` : ""}</td><td class="sub" style="width:110px">${dt(t.created_at)}</td>
+      <td style="text-align:right;white-space:nowrap">${who && !t.running ? `<button class="small primary" data-act="agent-run" data-id="${t.id}">交给 ${esc(who)}</button> ` : ""}<button class="small" data-act="agent-copy" data-id="${t.id}">复制任务说明</button>
         <button class="small" data-act="agent-paste" data-id="${t.id}">粘贴结果</button><button class="small danger" data-act="agent-cancel" data-id="${t.id}">取消</button></td></tr>`).join("")}</tbody></table>`
       : `<p class="sub">没有待办。在「创作」里点选题的「出稿」，或在「计划」页点「本周选题全部出稿」。</p>`}</div>
   ${A.recent.length ? `<div class="card"><h2>最近完成</h2>${A.recent.map((t) => `<div class="row"><span class="status done">#${t.id}</span><span class="grow">${esc(t.note || "")}</span><span class="sub">${dt(t.done_at)}</span></div>`).join("")}</div>` : ""}`;
@@ -684,7 +704,15 @@ function settingsPage() {
     <label class="field"><span>小红书封面比例</span><select id="st-xhs-ratio">${["3:4", "1:1", "4:3", "9:16"].map((r) => `<option ${r === s.xhs_cover_ratio ? "selected" : ""}>${r}</option>`).join("")}</select></label>
     <label class="field"><span>使用本机的 Chrome（可选，填 chrome.exe 的完整路径；留空用自带浏览器）</span><input id="st-chrome" value="${esc(s.chrome_path)}"></label>
   </div><div class="card"><h2>AI</h2>
-    <p>出稿、AI 复盘、对标拆解都交给你正在用的 AI 助手（Claude Code、Codex、WorkBuddy），<b>不需要另外配模型</b>。点了这些按钮会排进「AI 待办」，在助手里说「${ASK}」即可。</p>
+    <p>出稿、AI 复盘、对标拆解用的是<b>你自己的 AI 助手</b>，不需要另外配模型。工作台会直接调用你电脑上装好并登录过的 Claude Code、Codex 或 CodeBuddy（WorkBuddy 的命令行版），写好自动填回来。</p>
+    <div class="banner ${S.runners && S.runners.found.length ? "" : "ai"}">${!S.runners ? "没查到本机的 AI 助手。" : S.runners.found.length
+      ? `这台电脑上找到了：${S.runners.found.map((r) => `<b>${esc(r.name)}</b>`).join("、")}。${S.runners.chosen ? `现在由 <b>${esc(S.runners.chosen)}</b> 处理。` : ""}`
+      : `这台电脑上还没找到 Claude Code、Codex 或 CodeBuddy 的命令行。装好任意一个、在命令行里运行一次并登录，再回到这页点「保存并测试一下」。<br>
+        没装也能用：点了按钮后，在 WorkBuddy、Claude Code 这些助手里说「${ASK}」，或者在「AI 待办」页复制任务说明发给任何 AI。`}</div>
+    <div class="grid k2" style="margin:10px 0 0"><label class="field"><span>由谁处理</span><select id="st-runner">${[["auto", "自动（找到哪个用哪个）"], ["claude", "Claude Code"], ["codex", "Codex"], ["codebuddy", "CodeBuddy（WorkBuddy 的命令行版）"], ["custom", "自定义命令"], ["off", "不直连：我自己在助手里说「" + ASK + "」"]]
+      .map(([v, n]) => `<option value="${v}" ${v === s.ai_runner ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
+      <label class="field"><span>自定义命令（选了「自定义命令」才用：任务从标准输入送进去，标准输出就是结果）</span><input id="st-runner-cmd" value="${esc(s.ai_runner_cmd || "")}" placeholder="例如：claude -p --model sonnet"></label></div>
+    <div class="row"><button class="small" data-act="ai-test">保存并测试一下</button><span class="hint" id="ai-test-out"></span></div>
     <details><summary class="hint">高级（可选）：不用 AI 助手时，自己接一个兼容 OpenAI 的模型接口，工作台会自动处理待办</summary>
     <p class="hint">例如 Kimi、DeepSeek、通义千问。密钥只保存在这台电脑的 data/settings.json 里。</p>
     <label class="field"><span>接口地址</span><input id="st-url" value="${esc(s.ai_base_url)}"></label>
@@ -733,6 +761,7 @@ async function go(page) {
   if (page === "agent") S.agent = await api("/api/agent");
   if (page === "today") S.today = await api("/api/today");
   if (page === "playbook") S.playbook = await api("/api/playbook");
+  if (page === "settings") S.runners = await api("/api/ai/runners").catch(() => null);
   render();
 }
 let lastDone = null, pollTimer;
@@ -823,17 +852,17 @@ const ACTIONS = {
   "job-log": async (el) => { const id = +el.dataset.id; S.openJob = S.openJob === id ? null : id; S.jobLog = S.openJob ? (await api("/api/jobs/" + id)).log : ""; live(); },
   "job-cancel": async (el) => { await api(`/api/jobs/${el.dataset.id}/cancel`, {}); await refresh(); },
   review: async (el) => { await api("/api/review", { days: +$("#rv-days").value, ai: !!el.dataset.ai });
-    toast(el.dataset.ai && !S.state.agent_api ? `已排进 AI 待办：在 AI 助手里说「${ASK}」` : "正在生成复盘…"); await refresh(); render(); },
+    toast(el.dataset.ai ? handedTo() + (S.state.agent_auto ? "，写好会出现在这一页" : "") : "正在生成复盘…"); await refresh(); render(); },
   "review-del": async (el) => { await api("/api/reviews/delete", { id: +el.dataset.id }); await go("review"); },
   plan: async () => { await api("/api/plan", { days: 14 }); toast("正在生成本周计划…"); await refresh(); },
   "plan-refine": async () => {
     const ids = S.contents.filter((c) => c.source === "plan" && c.week === S.method.week && c.stage === S.method.workflows[c.workflow].stages[0][0]).map((c) => c.id);
-    await api("/api/plan/refine", { ids }); toast(S.state.agent_api ? "已交给模型接口" : `已排进 AI 待办：在 AI 助手里说「${ASK}」`); await refresh();
+    await api("/api/plan/refine", { ids }); toast(handedTo()); await refresh();
   },
   "plan-scripts": async () => {
     const ids = S.contents.filter((c) => c.source === "plan" && c.week === S.method.week && !c.script && !c.archived).map((c) => c.id);
     if (!ids.length) return toast("本周没有还没出稿的选题");
-    await api("/api/contents/ai", { ids }); toast(S.state.agent_api ? `${ids.length} 条已交给模型接口` : `${ids.length} 条已排进 AI 待办：在 AI 助手里说「${ASK}」`); await refresh(); await go("agent");
+    await api("/api/contents/ai", { ids }); toast(`${ids.length} 条` + handedTo()); await refresh(); await go("agent");
   },
   "open-content": async (el) => {
     S.contents = (await api("/api/contents")).contents;
@@ -851,7 +880,7 @@ const ACTIONS = {
   },
   "script-all": async (el) => {
     const ids = (el.dataset.ids || "").split(",").filter(Boolean).map(Number);
-    await api("/api/contents/ai", { ids }); toast(S.state.agent_api ? `${ids.length} 条已交给模型接口` : `${ids.length} 条已排进 AI 待办：在 AI 助手里说「${ASK}」`);
+    await api("/api/contents/ai", { ids }); toast(`${ids.length} 条` + handedTo());
     await refresh(); await go("today");
   },
   "content-conclude": async () => {
@@ -871,6 +900,14 @@ const ACTIONS = {
     if (!text) return;
     const { note } = await api("/api/agent/submit", { id: +el.dataset.id, text }); toast(note); await refresh(); await go(S.page);
     if (S.editing) { S.contents = (await api("/api/contents")).contents; openContent(S.contents.find((x) => x.id === S.editing.id)); }
+  },
+  "agent-run": async (el) => { await api("/api/agent/run", { ids: [+el.dataset.id] }); toast(handedTo()); await refresh(); await go(S.page); },
+  "agent-run-all": async () => { await api("/api/agent/run", {}); toast(handedTo()); await refresh(); await go("agent"); },
+  "ai-test": async () => {
+    await ACTIONS["save-settings"](true);
+    const out = $("#ai-test-out"); out.textContent = "正在调用，第一次可能要半分钟…";
+    try { const r = await api("/api/ai/test", { runner: $("#st-runner").value }); out.innerHTML = `<span class="status ok">通了</span> ${esc(r.name || "")} 回复：${esc(r.reply)}`; }
+    catch (e) { out.innerHTML = `<span class="status expired">没通</span> ${esc(e.message)}`; }
   },
   "agent-cancel": async (el) => { await api("/api/agent/cancel", { id: +el.dataset.id }); await refresh(); await go("agent"); },
   "new-content": (el) => openContent({ workflow: el.dataset.wf, stage: S.method.workflows[el.dataset.wf].stages[0][0], targets: [], checklist: {}, posts: [], source: "manual" }),
@@ -931,10 +968,10 @@ const ACTIONS = {
     toast("拆解已保存"); await reopenBench();
   },
   "bench-analyze": async () => { const p = S.benchOpen; await api("/api/bench/analyze", { posts: [{ platform: p.platform, post_id: p.post_id }] });
-    toast(S.state.agent_api ? "已交给模型接口" : `已排进 AI 待办：在 AI 助手里说「${ASK}」`); await refresh(); },
+    toast(handedTo()); await refresh(); },
   "bench-analyze-all": async () => {
     const posts = S.bench.hits.filter((p) => p.status === "new").slice(0, 10).map((p) => ({ platform: p.platform, post_id: p.post_id }));
-    await api("/api/bench/analyze", { posts }); toast(S.state.agent_api ? `${posts.length} 条已交给模型接口` : `${posts.length} 条已排进 AI 待办：在 AI 助手里说「${ASK}」`); await refresh();
+    await api("/api/bench/analyze", { posts }); toast(`${posts.length} 条` + handedTo()); await refresh();
   },
   "bench-ignore": async () => { const p = S.benchOpen; await api("/api/bench/mark", { platform: p.platform, post_id: p.post_id, status: p.status === "ignored" ? "new" : "ignored" }); await reopenBench(); },
   "bench-use": async () => {
@@ -993,11 +1030,12 @@ const ACTIONS = {
     const body = {}; document.querySelectorAll("[data-wf]").forEach((el) => { if (el.tagName === "TEXTAREA") body[el.dataset.wf] = el.value; });
     await api("/api/workflows", body); await reloadMethod(); toast("工作流已保存"); render();
   },
-  "save-settings": async () => {
+  "save-settings": async (quiet) => {
     await api("/api/settings", { auto_collect: $("#st-auto").checked, collect_hour: +$("#st-hour").value, max_posts: +$("#st-max").value, headless: $("#st-headless").checked,
-      chrome_path: $("#st-chrome").value, xhs_cover_ratio: $("#st-xhs-ratio").value, ai_base_url: $("#st-url").value, ai_model: $("#st-model").value, ai_api_key: $("#st-key").value,
+      chrome_path: $("#st-chrome").value, xhs_cover_ratio: $("#st-xhs-ratio").value, ai_runner: $("#st-runner").value, ai_runner_cmd: $("#st-runner-cmd").value, ai_base_url: $("#st-url").value, ai_model: $("#st-model").value, ai_api_key: $("#st-key").value,
       tikhub_api_key: $("#st-th-key").value, tikhub_base_url: $("#st-th-url").value, bench_hit_ratio: +$("#st-th-ratio").value,
       bench_pages: +$("#st-th-pages").value, bench_auto: $("#st-th-auto").checked });
+    if (quiet === true) { await refresh(); return; }
     toast("设置已保存"); await refresh(); render();
   },
 };

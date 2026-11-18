@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import agent, analytics, benchmarks, comments, config, covers, contents, db, demo, guide, importer, jobs, method, planner, playbook, tikhub
+from . import agent, analytics, runner, benchmarks, comments, config, covers, contents, db, demo, guide, importer, jobs, method, planner, playbook, tikhub
 
 ACCOUNT_RE = re.compile(r"^[\w一-鿿-]{1,30}$")
 
@@ -42,19 +42,36 @@ def state(con, worker):
     job_rows = db.rows(con, "SELECT id, type, params, status, created_at, started_at, finished_at, substr(log, -600) AS tail FROM jobs ORDER BY id DESC LIMIT 40")
     for j in job_rows:
         j["params"] = json.loads(j["params"])
+    running = auto_running(con)
     return {"accounts": accounts, "jobs": job_rows, "settings": config.public_settings(), "sau_installed": config.sau_installed(),
             "platforms": config.PLATFORMS, "demo_account": config.DEMO_ACCOUNT, "busy": worker.current is not None,
             "has_data": con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] > 0,
-            "agent_pending": [{"id": t["id"], "kind": t["kind"], "ref": t["ref"]} for t in db.rows(con, "SELECT id, kind, ref FROM agent_tasks WHERE status='pending'")],
-            "agent_api": agent.api_ready()}
+            "agent_pending": [{"id": t["id"], "kind": t["kind"], "ref": t["ref"], "running": t["id"] in running}
+                              for t in db.rows(con, "SELECT id, kind, ref FROM agent_tasks WHERE status='pending'")],
+            "agent_api": bool(agent.auto_name()), "agent_auto": agent.auto_name()}
 
 
 def request_ai(con, kind, ref, params=None):
-    """建一条 AI 待办；配了模型接口就顺手排一个任务让工作台自己做，否则等 AI 助手来领。"""
+    """建一条 AI 待办；本机有 AI 助手（或配了模型接口）就顺手排一个任务让工作台自己做，否则等 AI 助手来领。"""
     task_id = agent.create(con, kind, ref, params)
-    if agent.api_ready():
-        jobs.enqueue(con, "agent_auto", {"tasks": [task_id]})
+    if agent.auto_name():
+        queue_auto(con, [task_id])
     return task_id
+
+
+def auto_running(con):
+    """正在排队或正在由工作台处理的待办编号。"""
+    busy = set()
+    for j in db.rows(con, "SELECT params FROM jobs WHERE type='agent_auto' AND status IN ('pending','running')"):
+        busy.update(json.loads(j["params"]).get("tasks", []))
+    return busy
+
+
+def queue_auto(con, task_ids):
+    """排一个 AI 处理任务；已经在排队或正在处理的待办不重复排。"""
+    busy = auto_running(con)
+    todo = [t for t in task_ids if t not in busy]
+    return jobs.enqueue(con, "agent_auto", {"tasks": todo}) if todo else None
 
 
 def require_account(con, platform, account):
@@ -203,8 +220,8 @@ def api_post(con, worker, path, body):
         if not ids:
             raise ApiError("没有要细化的选题")
         task_id = planner.refine_titles(con, ids)
-        if agent.api_ready():
-            jobs.enqueue(con, "agent_auto", {"tasks": [task_id]})
+        if agent.auto_name():
+            queue_auto(con, [task_id])
         return {"task": task_id}
     if path == "/api/contents/save":
         try:
@@ -288,6 +305,17 @@ def api_post(con, worker, path, body):
         with con:
             con.execute("UPDATE agent_tasks SET status='cancelled', done_at=? WHERE id=? AND status='pending'", (jobs.now_ms(), int(body["id"])))
         return {"ok": True}
+    if path == "/api/agent/run":  # 让工作台现在就处理这些待办（之前没处理成的也可以再试）
+        if not agent.auto_name():
+            raise ApiError("本机没找到 Claude Code / Codex / CodeBuddy，也没配模型接口。可以到「设置 → AI」看看")
+        ids = [int(i) for i in body.get("ids") or []] or [t["id"] for t in agent.pending(con)]
+        return {"job": queue_auto(con, ids)}
+    if path == "/api/ai/test":
+        key = body.get("runner") or None
+        try:
+            return {"reply": runner.test(None if key in (None, "auto") else key), "name": agent.auto_name()}
+        except RuntimeError as e:
+            raise ApiError(str(e))
     if path == "/api/agent/submit":  # 也可以把 AI 写好的结果粘贴进来
         try:
             return {"note": agent.submit(con, int(body["id"]), body.get("text") or "")}
@@ -379,7 +407,12 @@ def api_get(con, worker, path, query):
     if path == "/api/agent":
         tasks = agent.pending(con)
         done = db.rows(con, "SELECT id, kind, note, done_at FROM agent_tasks WHERE status='done' ORDER BY done_at DESC LIMIT 5")
-        return {"pending": tasks, "recent": done, "api_ready": agent.api_ready(), "kinds": agent.KINDS}
+        running = auto_running(con)
+        for t in tasks:
+            t["running"] = t["id"] in running
+        return {"pending": tasks, "recent": done, "auto": agent.auto_name(), "kinds": agent.KINDS}
+    if path == "/api/ai/runners":
+        return {"found": runner.detect(), "chosen": runner.chosen()[1], "all": [{"key": k, "name": v["name"]} for k, v in runner.RUNNERS.items()]}
     m = re.fullmatch(r"/api/agent/(\d+)/brief", path)
     if m:
         try:
@@ -485,7 +518,7 @@ def make_handler(worker, port):
 def serve(port=None, open_browser=True):
     config.ensure_dirs()
     port = port or int(config.load_settings()["port"])
-    worker = jobs.Worker()
+    worker = jobs.Workers()
     worker.start()
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(worker, port))
     url = f"http://127.0.0.1:{port}"
