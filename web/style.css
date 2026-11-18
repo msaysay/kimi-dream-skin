@@ -172,3 +172,27 @@ details.card > summary { cursor: pointer; }
 .md .md-table table { font-size: 13px; }
 .md .md-table th { white-space: nowrap; }
 .md blockquote { margin: 6px 0; padding: 4px 12px; border-left: 3px solid var(--line, #ddd); color: var(--muted, #666); }
+.target { flex-wrap: wrap; }
+.issues { margin-top: 12px; display: grid; gap: 6px; }
+.issue { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 1.5; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); }
+.issue.block { border-color: var(--bad); }
+.issue .status { flex: none; }
+.hot-pick { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.hot-pick:last-child { border-bottom: 0; }
+.hot-list { display: grid; gap: 2px; max-height: 520px; overflow: auto; }
+.hot-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; font-size: 13px; }
+.hot-row.dim { opacity: .5; }
+.hot-row .rk { width: 22px; color: var(--muted); text-align: right; flex: none; font-variant-numeric: tabular-nums; }
+.hot-row a, .hot-pick a { color: inherit; text-decoration: none; } .hot-row a:hover, .hot-pick a:hover { text-decoration: underline; }
+.cal-head, .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.cal-head { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.cal-day { min-height: 104px; border: 1px solid var(--line); border-radius: 8px; padding: 6px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+.cal-day.out { opacity: .45; } .cal-day.today { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.cal-num { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.cal-ev { color: var(--xhs); font-size: 11px; } .cal-ev.mine { color: var(--accent); } .cal-ev a { cursor: pointer; margin-left: 2px; color: var(--muted); }
+.cal-it { border-radius: 6px; padding: 3px 6px; line-height: 1.35; overflow: hidden; }
+.cal-it.post { background: var(--hover); }
+.cal-it.sched { border: 1px solid var(--accent); }
+.cal-it.plan { border: 1px dashed var(--axis); cursor: pointer; } .cal-it.plan.late { border-color: var(--bad); }
+.cal-it[data-act] { cursor: pointer; }
+.hot-pick > .grow { flex: 1; min-width: 0; }

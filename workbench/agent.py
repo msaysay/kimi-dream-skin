@@ -16,7 +16,7 @@ import time
 from . import config, contents, method
 from .db import rows
 
-KINDS = {"script": "出稿", "review": "AI 复盘", "bench": "拆解对标爆款", "titles": "把选题方向写成标题"}
+KINDS = {"script": "出稿", "review": "AI 复盘", "bench": "拆解对标爆款", "titles": "把选题方向写成标题", "hot": "挑适合做的热点"}
 TAG_LABELS = {name: field for field, (name, _) in method.TAG_FIELDS.items()}
 
 
@@ -54,6 +54,8 @@ def label(con, t):
         pf, pid = t["ref"].split("|", 1)
         b = rows(con, "SELECT title FROM bench_posts WHERE platform=? AND post_id=?", pf, pid)
         return f"拆解对标爆款：{(b[0]['title'] if b else pid)[:30]}"
+    if t["kind"] == "hot":
+        return f"从 {len(p.get('ids') or [])} 个热点里挑适合做的"
     return f"把 {len(t['ref'].split(','))} 条选题方向写成具体标题"
 
 
@@ -79,6 +81,9 @@ def brief(con, task_id, direct=False):
         text = ("# 任务：拆解一条对标爆款\n\n" + benchmarks.analyze_brief(con, pf, pid) + "\n\n## 输出格式（开头的 --- 块会被程序读取）\n"
                 "```\n---\n母题: <字典里的值>\n原型: <字典里的值>\n开头钩: <字典里的值>\n中段留人: <字典里的值>\n结尾钩: <字典里的值>\n时长档: <字典里的值>\n---\n"
                 "## 开头怎么抓人\n…\n## 结构怎么推进\n…\n## 结尾留了什么动作\n…\n## 为什么能爆（结合数据）\n…\n## 我们怎么借用（2 个符合账号定位的选题）\n…\n```")
+    elif t["kind"] == "hot":
+        from . import hot
+        text = hot.judge_brief(con, p.get("ids") or [])
     else:
         items = [contents.get(con, int(i)) for i in t["ref"].split(",")]
         brief_items = [{"编号": c["id"], "方向": c["title"], "母题": c["motif"], "原型": c["archetype"], "开头钩": c["hook_open"],
@@ -187,6 +192,9 @@ def submit(con, task_id, text):
         pf, pid = t["ref"].split("|", 1)
         benchmarks.mark(con, pf, pid, tags=tags, analysis=body)
         note = "拆解已保存"
+    elif t["kind"] == "hot":
+        from . import hot
+        note = hot.judge_submit(con, p.get("ids") or [], text)
     else:
         ids = {int(i) for i in t["ref"].split(",")}
         done = 0

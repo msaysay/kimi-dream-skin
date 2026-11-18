@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import agent, analytics, runner, benchmarks, comments, config, covers, contents, db, demo, guide, importer, jobs, method, planner, playbook, tikhub
+from . import agent, analytics, runner, cal, hot, precheck, benchmarks, comments, config, covers, contents, db, demo, guide, importer, jobs, method, planner, playbook, tikhub
 
 ACCOUNT_RE = re.compile(r"^[\w一-鿿-]{1,30}$")
 
@@ -40,15 +40,20 @@ def state(con, worker):
         a["has_login"] = a["status"] == "demo" or config.cookie_file(a["platform"], a["account"]).exists()
         a["posts"] = con.execute("SELECT COUNT(*) FROM posts WHERE platform=? AND account=?", (a["platform"], a["account"])).fetchone()[0]
     job_rows = db.rows(con, "SELECT id, type, params, status, created_at, started_at, finished_at, substr(log, -600) AS tail FROM jobs ORDER BY id DESC LIMIT 40")
+    checks = {c["job_id"]: c for c in db.rows(con, "SELECT job_id, status, note FROM publish_checks")}
     for j in job_rows:
         j["params"] = json.loads(j["params"])
+        if j["type"] == "publish" and j["id"] in checks:  # 发布后回读的结果
+            j["check"] = {"status": checks[j["id"]]["status"], "note": checks[j["id"]]["note"]}
     running = auto_running(con)
     return {"accounts": accounts, "jobs": job_rows, "settings": config.public_settings(), "sau_installed": config.sau_installed(),
             "platforms": config.PLATFORMS, "demo_account": config.DEMO_ACCOUNT, "busy": worker.current is not None,
             "has_data": con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] > 0,
             "agent_pending": [{"id": t["id"], "kind": t["kind"], "ref": t["ref"], "running": t["id"] in running}
                               for t in db.rows(con, "SELECT id, kind, ref FROM agent_tasks WHERE status='pending'")],
-            "agent_api": bool(agent.auto_name()), "agent_auto": agent.auto_name()}
+            "agent_api": bool(agent.auto_name()), "agent_auto": agent.auto_name(),
+            "hot_fit": con.execute("SELECT COUNT(*) FROM hot_topics WHERE fit='高' AND state='new' AND content_id IS NULL AND fetched_at>=?",
+                                   (jobs.now_ms() - 2 * 86400000,)).fetchone()[0]}
 
 
 def request_ai(con, kind, ref, params=None):
@@ -119,6 +124,9 @@ def api_post(con, worker, path, body):
         for f in files + ([cover] if cover else []):
             if not Path(f).is_file():
                 raise ApiError(f"找不到文件：{f}")
+        blocks = [i for i in precheck.check(con, body) if i["level"] == "block"]
+        if blocks:
+            raise ApiError("发布前检查没通过：" + "；".join((config.PLATFORMS[i["platform"]]["name"] + "：" if i["platform"] else "") + i["msg"] for i in blocks[:3]))
         made = None
         if (body.get("kind") or "video") == "video" and (cover or body.get("cover_sec") not in (None, "")):
             try:  # 一张原图按每个平台的规格各生成一份
@@ -145,6 +153,56 @@ def api_post(con, worker, path, body):
             with con:
                 con.execute("UPDATE contents SET stage='发布', updated_at=? WHERE id=?", (jobs.now_ms(), int(body["content_id"])))
         return {"jobs": [jobs.enqueue(con, "publish", p) for p in queued]}
+    if path == "/api/publish/check":
+        return {"issues": precheck.check(con, body)}
+    # ---- 热点雷达 ----
+    if path == "/api/hot/refresh":
+        return {"job": jobs.enqueue(con, "hot", {"judge": bool(body.get("judge"))})}
+    if path == "/api/hot/judge":
+        ids = [int(i) for i in body.get("ids") or []] or [r["id"] for r in hot.unjudged(con)]
+        if not ids:
+            raise ApiError("没有还没判断过的热点，先刷新一下热榜")
+        return {"task": request_ai(con, "hot", f"hot-{jobs.now_ms()}", {"ids": ids})}
+    if path == "/api/hot/to_content":
+        try:
+            return {"id": hot.to_content(con, int(body["id"]), body.get("title"))}
+        except ValueError as e:
+            raise ApiError(str(e))
+    if path == "/api/hot/ignore":
+        with con:
+            con.execute("UPDATE hot_topics SET state='ignored' WHERE id=?", (int(body["id"]),))
+        return {"ok": True}
+    if path == "/api/hot/boards":
+        on = [k for k in body.get("boards") or [] if k in hot.BUILTIN]
+        config.save_settings({"hot_boards": ",".join(on)})
+        return {"ok": True}
+    if path == "/api/hot/rss/add":
+        try:
+            return {"id": hot.add_rss(con, body.get("name"), body.get("url"))}
+        except Exception as e:
+            raise ApiError(f"读不了这个订阅地址：{e}")
+    if path == "/api/hot/rss/delete":
+        with con:
+            con.execute("DELETE FROM hot_topics WHERE source=? AND content_id IS NULL", (f"rss{int(body['id'])}",))
+            con.execute("DELETE FROM hot_sources WHERE id=?", (int(body["id"]),))
+        return {"ok": True}
+    # ---- 日历 ----
+    if path == "/api/calendar/schedule":
+        date = (body.get("date") or "").strip()
+        if date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+            raise ApiError("日期格式不对")
+        contents.save(con, {"id": int(body["id"]), "schedule_date": date or None})
+        return {"ok": True}
+    if path == "/api/calendar/event":
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", body.get("date") or "") or not (body.get("title") or "").strip():
+            raise ApiError("要填日期和名字")
+        with con:
+            con.execute("INSERT INTO cal_events (date, title, note) VALUES (?,?,?)", (body["date"], body["title"].strip()[:30], (body.get("note") or "")[:200]))
+        return {"ok": True}
+    if path == "/api/calendar/event/delete":
+        with con:
+            con.execute("DELETE FROM cal_events WHERE id=?", (int(body["id"]),))
+        return {"ok": True}
     if path == "/api/review":
         days = int(body.get("days") or 0)
         if body.get("ai"):
@@ -411,6 +469,12 @@ def api_get(con, worker, path, query):
         for t in tasks:
             t["running"] = t["id"] in running
         return {"pending": tasks, "recent": done, "auto": agent.auto_name(), "kinds": agent.KINDS}
+    if path == "/api/hot":
+        return hot.view(con)
+    if path == "/api/calendar":
+        return cal.month(con, (query.get("month") or [""])[0])
+    if path == "/api/publish/checks":
+        return {"checks": db.rows(con, "SELECT * FROM publish_checks ORDER BY checked_at DESC LIMIT 30")}
     if path == "/api/ai/runners":
         return {"found": runner.detect(), "chosen": runner.chosen()[1], "all": [{"key": k, "name": v["name"]} for k, v in runner.RUNNERS.items()]}
     m = re.fullmatch(r"/api/agent/(\d+)/brief", path)

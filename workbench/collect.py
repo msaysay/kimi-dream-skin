@@ -85,7 +85,7 @@ def write(path, obj):
     path.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
 
 
-def collect_xhs(page, cap, out, limit, log):
+def collect_xhs(page, cap, out, limit, log, details=True):
     base = URLS["xhs"]
     page.goto(base + "/statistics/data-analysis", wait_until="domcontentloaded")
     got = cap.wait(r"datacenter/note/analyze/list", 20000)
@@ -101,7 +101,7 @@ def collect_xhs(page, cap, out, limit, log):
     fetched_at = int(time.time() * 1000)
     notes = notes[:limit]
     write(out / "_list.json", {"fetchedAt": fetched_at, "notes": notes})
-    for n in notes:
+    for n in notes if details else []:
         cap.clear()
         page.goto(f"{base}/statistics/note-detail?noteId={n['id']}", wait_until="domcontentloaded")
         cap.wait(r"datacenter/note/base", 15000)
@@ -116,12 +116,12 @@ def collect_xhs(page, cap, out, limit, log):
     return len(notes)
 
 
-def collect_douyin(page, cap, out, limit, log):
+def collect_douyin(page, cap, out, limit, log, details=True):
     base = URLS["douyin"]
     page.goto(base + "/creator-micro/data-center/content", wait_until="domcontentloaded")
     got = cap.wait(r"web/api/creator/item/list", 20000)
     pause(page, 2000)
-    for _ in range(3):  # 往下滚几屏，让列表多加载几页
+    for _ in range(3 if details else 0):  # 往下滚几屏，让列表多加载几页
         page.mouse.wheel(0, 4000)
         pause(page, 1200)
     items, seen = [], set()
@@ -136,7 +136,7 @@ def collect_douyin(page, cap, out, limit, log):
     items = items[:limit]
     write(out / "_list.json", {"fetchedAt": fetched_at, "items": items})
     pattern = r"data/item/summarize|realtime/analysis/data_center|item/play/source|fans/item/portrait|item_analysis/metrics_trend"
-    for it in items:
+    for it in items if details else []:
         cap.clear()
         page.goto(f"{base}/creator-micro/work-management/work-detail/{it['id']}?enter_from=item_data", wait_until="domcontentloaded")
         cap.wait(r"data/item/summarize", 15000)
@@ -164,7 +164,7 @@ FETCH_JS = """async ({url, headers, body}) => {
 }"""
 
 
-def collect_channels(page, cap, out, limit, log):
+def collect_channels(page, cap, out, limit, log, details=True):
     base = URLS["channels"]
     page.goto(base + "/platform/statistic/post", wait_until="domcontentloaded")
     if not click_text(page, "单篇视频", 25000):
@@ -192,7 +192,7 @@ def collect_channels(page, cap, out, limit, log):
     posts = (call("post_list", {"pageSize": 50, "currentPage": 1, "startTime": day0 - 30 * 86400, "endTime": day0 + 86400}).get("list") or [])[:limit]
     fetched_at = int(time.time() * 1000)
     write(out / "_list.json", {"fetchedAt": fetched_at, "list": posts})
-    for p in posts:
+    for p in posts if details else []:
         detail = {"fetchedAt": fetched_at}
         # 单条详情拿不到不影响列表里的完播率等指标，所以只记下错误
         try:
@@ -223,13 +223,14 @@ def sync_playwright():
     return sp()
 
 
-def run(platform, account, log=print, state_file=None):
-    """采集一个账号，原始数据写到 data/raw/<平台>/<账号>/，返回作品数。"""
+def run(platform, account, log=print, state_file=None, details=True):
+    """采集一个账号，原始数据写到 data/raw/<平台>/<账号>/，返回作品数。
+    details=False 时只读作品列表（发布后核验用），写到 data/raw_list/ 下，不动上一次完整采集的数据。"""
     settings = config.load_settings()
     state_file = state_file or config.cookie_file(platform, account)
     if not state_file.exists():
         raise NotLoggedIn(f"还没有登录{config.PLATFORMS[platform]['name']}账号「{account}」，请先在「账号」页扫码登录")
-    out = config.DATA / "raw" / platform / account
+    out = config.DATA / ("raw" if details else "raw_list") / platform / account
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     with sync_playwright() as pw:
@@ -243,9 +244,24 @@ def run(platform, account, log=print, state_file=None):
             context = browser.new_context(storage_state=str(state_file), viewport={"width": 1440, "height": 900})
             page = context.new_page()
             cap = Capture(page)
-            count = COLLECTORS[platform](page, cap, out, int(settings["max_posts"]), log)
+            count = COLLECTORS[platform](page, cap, out, int(settings["max_posts"]), log, details)
             # 采集成功说明登录有效，把刷新过的登录态存回去，延长有效期
             context.storage_state(path=str(state_file))
             return count
         finally:
             browser.close()
+
+
+def list_posts(platform, account, log=print, state_file=None):
+    """只读作品列表：返回 [{post_id, title, post_time(毫秒)}]，最新的在前。"""
+    run(platform, account, log, state_file, details=False)
+    lst = json.loads((config.DATA / "raw_list" / platform / account / "_list.json").read_text(encoding="utf-8"))
+    out = []
+    for it in lst.get({"xhs": "notes", "douyin": "items", "channels": "list"}[platform]) or []:
+        if platform == "xhs":
+            out.append({"post_id": it.get("id"), "title": it.get("title") or "", "post_time": it.get("post_time") or 0})
+        elif platform == "douyin":
+            out.append({"post_id": it.get("id"), "title": it.get("description") or "", "post_time": int(it.get("create_time") or 0) * 1000})
+        else:
+            out.append({"post_id": it.get("objectId"), "title": (it.get("desc") or {}).get("description") or "", "post_time": int(it.get("createTime") or 0) * 1000})
+    return sorted([p for p in out if p["post_id"]], key=lambda p: -p["post_time"])

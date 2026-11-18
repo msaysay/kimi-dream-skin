@@ -7,7 +7,8 @@ const css = (name) => getComputedStyle(document.documentElement).getPropertyValu
 const S = {
   page: "today", state: null, method: null, data: null, days: 30, reviews: [], contents: [], comments: null,
   openJob: null, jobLog: "", commentTab: "todo", editing: null, editRule: null, bench: null, benchDays: 30, benchCands: null, benchTab: "hits",
-  form: { kind: "video", files: "", cover: "", cover_sec: "", cover_focus: [0.5, 0.4], cover_wide: "", cover_focus2: [0.5, 0.5], cover_mode: "auto", title: "", desc: "", tags: "", schedule: "", headless: false, targets: {}, drafts: {}, content_id: null },
+  form: { kind: "video", files: "", cover: "", cover_sec: "", cover_focus: [0.5, 0.4], cover_wide: "", cover_focus2: [0.5, 0.5], cover_mode: "auto", title: "", desc: "", tags: "", schedule: "", headless: false, targets: {}, drafts: {}, ptitles: {}, content_id: null },
+  hot: null, cal: null, calMonth: "", checkIssues: null,
   coverPreview: null,
 };
 
@@ -50,7 +51,8 @@ const VERDICT_CLASS = { "双强型": "good", "泛流量型": "warn", "垂直型"
 const verdictTag = (v) => (v ? `<span class="tag v-${VERDICT_CLASS[v] || ""}">${{ good: "✓", warn: "▲", info: "◆", bad: "✕" }[VERDICT_CLASS[v]] || "●"} ${v}</span>` : "");
 const LEVEL_ICON = { "优秀": "✓", "良好": "●", "及格": "○", "偏弱": "✕", "无数据": "—" };
 const JOB_NAME = { login: "扫码登录", check: "检查登录", publish: "发布", collect: "采集数据", review: "生成复盘", plan: "生成选题计划",
-  refine: "AI 细化选题标题", ai_script: "AI 写稿", comments: "抓评论", comment_send: "发送评论回复", bench: "刷新对标账号", bench_analyze: "AI 拆解对标爆款" };
+  refine: "AI 细化选题标题", ai_script: "AI 写稿", comments: "抓评论", comment_send: "发送评论回复", bench: "刷新对标账号", bench_analyze: "AI 拆解对标爆款", hot: "刷新热榜", verify: "确认发出", agent_auto: "AI 处理待办" };
+const CHECK_NAME = { confirmed: ["已确认发出", "v-good"], waiting: ["等待确认", "v-info"], unverified: ["未确认", "v-bad"], login: ["没法确认", "v-bad"], scheduled: ["到点后确认", ""] };
 const STATUS_NAME = { pending: "排队中", running: "进行中", done: "完成", failed: "失败", cancelled: "已取消" };
 const ACC_STATUS = { ok: "已登录", expired: "登录过期", unknown: "未登录", demo: "示例" };
 function jobTitle(j) {
@@ -58,6 +60,7 @@ function jobTitle(j) {
   const who = p.platform ? `${pfName(p.platform)}「${p.account}」` : "";
   if (j.type === "publish") return `发布到${who}：${p.title || ""}`;
   if (j.type === "review") return `生成${p.ai ? " AI " : "规则"}复盘`;
+  if (j.type === "verify") return `确认发出：${who} ${p.title || ""}${p.attempt ? `（第 ${p.attempt + 1} 次）` : ""}`;
   return `${JOB_NAME[j.type] || j.type} ${who}`;
 }
 // AI 的活儿交给你正在用的 AI 助手（Claude Code / Codex / WorkBuddy）：按钮总是可用，点了就排进「AI 待办」
@@ -576,7 +579,8 @@ function publishPage() {
       ${pfDot(a.platform)}<b>${pfName(a.platform)}</b>「${esc(a.account)}」
       ${blocked ? `<span class="hint">${blocked}</span>` : ""}
       ${def.draft && !isNote ? `<span class="grow"></span><label class="hint"><input type="checkbox" data-draft="${esc(key)}" ${f.drafts[key] ? "checked" : ""}>只存草稿，不直接发</label>` : ""}
-      ${a.platform === "xhs" ? `<span class="grow"></span><span class="hint">小红书对自动发布较敏感，建议保持显示浏览器窗口</span>` : ""}</label>`;
+      ${a.platform === "xhs" ? `<span class="grow"></span><span class="hint">小红书对自动发布较敏感，建议保持显示浏览器窗口</span>` : ""}
+      ${a.platform === "xhs" ? `<input data-ptitle="${esc(key)}" value="${esc(f.ptitles[key] || "")}" maxlength="20" placeholder="小红书单独的标题（最多 20 字，留空用左边的标题）" style="flex-basis:100%;margin-top:6px">` : ""}</label>`;
   }).join("") : `<div class="sub">还没有账号，请先到「账号」页添加并登录。</div>`;
   return `<div class="head"><h1>发布</h1></div>
   ${S.state.sau_installed ? "" : `<div class="banner">还没有安装发布引擎。请先关闭工作台，双击运行「安装.cmd」，再重新启动。</div>`}
@@ -595,11 +599,24 @@ function publishPage() {
     <p class="hint">三个平台分工不同：${Object.entries(S.method.roles).map(([k, v]) => `${pfName(k)}${esc(v)}`).join("；")}。</p>
     <label class="field"><span>定时发布（可选，留空就是立即发布；由平台在这个时间自动发出，不需要一直开着电脑）</span><input type="datetime-local" data-f="schedule" value="${esc(f.schedule)}"></label>
     <label class="field"><input type="checkbox" data-f="headless" ${f.headless ? "checked" : ""}>后台运行，不显示浏览器窗口</label>
-    <button class="primary" data-act="publish">开始发布</button>
-    <p class="hint">发布时会依次打开各平台的发布页自动填写并提交，同一时间只跑一个。进度在下方和「任务」页查看。</p>
+    <div class="row"><button class="primary" data-act="publish">开始发布</button><button data-act="publish-check">先检查一遍</button></div>
+    ${issuesHtml(S.checkIssues)}
+    <p class="hint">发布前会自动检查标题字数、有没有微信号和外链、有没有泄露密钥。发完 2 分钟后会到作品列表里确认是不是真的发出去了。
+      发布时会依次打开各平台的发布页自动填写并提交，同一时间只跑一个。进度在下方和「任务」页查看。</p>
   </div></div>
   <div class="card"><h2>最近的发布</h2><div id="live-publish"></div></div>`;
 }
+function issuesHtml(list) {
+  if (!list) return "";
+  if (!list.length) return `<div class="banner" style="border-color:var(--good);margin-top:12px">检查通过，没发现问题。</div>`;
+  return `<div class="issues">${list.map((i) => `<div class="issue ${i.level}"><span class="status ${i.level === "block" ? "expired" : "pending"}">${i.level === "block" ? "要改" : "提醒"}</span>
+    <span>${i.platform ? `<b>${pfName(i.platform)}</b>：` : ""}${esc(i.msg)}</span></div>`).join("")}</div>`;
+}
+const publishBody = () => {
+  const f = S.form;
+  const targets = Object.keys(f.targets).filter((k) => f.targets[k]).map((k) => { const [platform, ...rest] = k.split("/"); return { platform, account: rest.join("/"), draft: !!f.drafts[k], title: (f.ptitles[k] || "").trim() || undefined }; });
+  return { kind: f.kind, files: f.files.split("\n"), cover: f.cover, cover_sec: f.cover_sec, cover_focus: f.cover_focus, cover_wide: f.cover_wide, cover_focus2: f.cover_focus2, cover_mode: f.cover_mode, title: f.title, desc: f.desc, tags: f.tags, schedule: f.schedule, headless: f.headless, targets, content_id: f.content_id };
+};
 const MODE_NAME = { crop: "裁剪", pad: "完整画面 + 模糊背景" };
 function coverSection(f) {
   const P = S.coverPreview;
@@ -620,7 +637,8 @@ function coverSection(f) {
 function jobsTable(list, empty) {
   if (!list.length) return `<div class="sub">${empty}</div>`;
   return `<table><tbody>${list.map((j) => `<tr><td style="width:110px"><span class="status ${j.status}">${STATUS_NAME[j.status]}</span></td>
-    <td>${esc(jobTitle(j))}${j.params.schedule ? ` <span class="tag">定时 ${esc(j.params.schedule.replace("T", " "))}</span>` : ""}${j.params.draft ? ` <span class="tag">草稿</span>` : ""}${j.params.auto ? ` <span class="tag">自动</span>` : ""}
+    <td>${esc(jobTitle(j))}${j.params.schedule ? ` <span class="tag">定时 ${esc(j.params.schedule.replace("T", " "))}</span>` : ""}${j.params.draft ? ` <span class="tag">草稿</span>` : ""}${j.params.auto ? ` <span class="tag">自动</span>` : ""}${j.check && CHECK_NAME[j.check.status] ? ` <span class="tag ${CHECK_NAME[j.check.status][1]}" title="${esc(j.check.note || "")}">${CHECK_NAME[j.check.status][0]}</span>` : ""}
+      ${j.check && ["unverified", "login"].includes(j.check.status) ? `<div class="hint">${esc(j.check.note || "")}。请到平台的作品管理里确认。</div>` : ""}
       ${S.openJob === j.id ? `<pre class="log">${esc(S.jobLog || "（没有输出）")}</pre>` : j.status === "failed" || j.status === "running" || (j.status === "done" && j.type === "plan") ? `<div class="hint">${esc((j.tail || "").trim().split("\n").pop())}</div>` : ""}</td>
     <td class="sub num-cell" style="width:110px">${dt(j.created_at)}</td>
     <td style="width:150px;text-align:right"><button class="small" data-act="job-log" data-id="${j.id}">${S.openJob === j.id ? "收起" : "日志"}</button>
@@ -650,6 +668,68 @@ function accountsTable() {
         `<button class="small" data-act="acc-login" ${d}>扫码登录</button> <button class="small" data-act="acc-check" ${d}>检查登录</button>
          <button class="small" data-act="acc-collect" ${d}>采集</button> <button class="small danger" data-act="acc-del" ${d}>删除</button>`}</td></tr>`;
   }).join("")}</tbody></table>`;
+}
+
+// ---------- 热点雷达 ----------
+const FIT_CLASS = { "高": "v-good", "中": "v-info", "低": "", "不碰": "v-bad" };
+function hotPage() {
+  const H = S.hot;
+  if (!H) return `<div class="card sub">加载中…</div>`;
+  const who = S.state.agent_auto;
+  const running = S.state.jobs.some((j) => j.type === "hot" && (j.status === "pending" || j.status === "running"));
+  const judging = (S.state.agent_pending || []).filter((x) => x.kind === "hot");
+  const picked = H.picked.length ? H.picked.map((x) => `<div class="hot-pick"><div class="grow">
+      <div><span class="tag ${FIT_CLASS[x.fit]}">适合度 ${x.fit}</span> <b>${esc(x.angle || x.title)}</b></div>
+      <div class="sub">热点：${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noreferrer">${esc(x.title)}</a>` : esc(x.title)} · ${esc(x.source_name)}${x.heat ? " · " + esc(x.heat) : ""}</div>
+      ${x.reason ? `<div class="hint">${esc(x.reason)}</div>` : ""}</div>
+      ${x.content_id ? `<button class="small" data-act="open-content" data-id="${x.content_id}">已转成选题，打开</button>`
+        : `<button class="small primary" data-act="hot-pick" data-id="${x.id}">转成选题</button><button class="small" data-act="hot-ignore" data-id="${x.id}">不做</button>`}</div>`).join("")
+    : `<p class="sub" style="margin:0">${H.unjudged ? `有 ${H.unjudged} 个热点还没看过。点右上角「让 AI 挑适合我的」，它会按你的定位卡筛一遍。` : "还没有热点。点右上角「刷新热榜」。"}</p>`;
+  const groups = H.groups.map((g) => `<div class="card"><h2>${esc(g.name)} <span class="sub" style="font-weight:400">${g.fetched_at ? dt(g.fetched_at) + " 更新" : "还没读到"}</span></h2>
+    ${g.last_error ? `<div class="hint">上次没读到：${esc(g.last_error)}</div>` : ""}
+    ${g.items.length ? `<div class="hot-list">${g.items.slice(0, 30).map((x) => `<div class="hot-row ${x.fit === "不碰" || x.fit === "低" ? "dim" : ""}"><span class="rk">${x.rank}</span>
+      <span class="grow">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noreferrer">${esc(x.title)}</a>` : esc(x.title)}${x.heat ? ` <span class="sub">${esc(x.heat)}</span>` : ""}</span>
+      ${x.fit ? `<span class="tag ${FIT_CLASS[x.fit]}">${x.fit}</span>` : ""}
+      ${x.content_id ? `<span class="tag v-good">已做</span>` : `<button class="small" data-act="hot-pick" data-id="${x.id}">做这个</button>`}</div>`).join("")}</div>` : `<p class="sub" style="margin:0">这个来源现在没有内容。</p>`}</div>`).join("");
+  return `<div class="head"><h1>热点</h1><span class="sub">各平台热榜和你订阅的来源，AI 按定位卡挑出适合你做的</span><span class="grow"></span>
+    <button data-act="hot-refresh" ${running ? "disabled" : ""}>${running ? "正在刷新…" : "刷新热榜"}</button>
+    <button class="primary" data-act="hot-judge" ${H.unjudged ? "" : "disabled"}>让 AI 挑适合我的</button></div>
+  ${judging.map(agentHint).join("")}
+  <div class="banner">热榜只有标题，<b>动笔前要自己核实事件</b>。时政、灾难、未经证实的传闻，AI 会直接标「不碰」。热点有时效，想做就在 48 小时内发出去。</div>
+  <div class="card"><h2>适合你做的 ${H.picked.length ? H.picked.length + " 个" : ""}</h2>${picked}</div>
+  <div class="grid k2">${groups}</div>
+  <div class="card"><h2>来源</h2>
+    <div class="row" style="flex-wrap:wrap">${H.sources.filter((s) => s.kind === "board").map((s) => `<label class="hint"><input type="checkbox" data-board="${s.key}" ${s.enabled ? "checked" : ""}> ${esc(s.name)}</label>`).join("")}</div>
+    <p class="hint">热榜来自免费的第三方聚合接口，偶尔会读不到。更稳的办法是订阅你这个领域的 RSS（比如行业媒体、博客的订阅地址）：</p>
+    ${H.sources.filter((s) => s.kind === "rss").map((s) => `<div class="row"><span class="grow">${esc(s.name)} <span class="sub">${esc(s.url)}</span></span><button class="small danger" data-act="hot-rss-del" data-id="${s.id}">删除</button></div>`).join("")}
+    <div class="row" style="margin-top:8px"><input id="rss-name" placeholder="名字，例如：某某 AI 周报" style="width:220px"><div class="grow"><input id="rss-url" placeholder="RSS / Atom 订阅地址，以 http 开头"></div><button data-act="hot-rss-add">添加订阅</button></div></div>`;
+}
+
+// ---------- 内容日历 ----------
+function calendarPage() {
+  const C = S.cal;
+  if (!C) return `<div class="card sub">加载中…</div>`;
+  const chip = (cls, html, attrs = "") => `<div class="cal-it ${cls}" ${attrs}>${html}</div>`;
+  const cell = (d) => `<div class="cal-day ${d.in_month ? "" : "out"} ${d.today ? "today" : ""}" data-date="${d.date}">
+    <div class="cal-num">${d.day}${d.events.map((e) => ` <span class="cal-ev ${e.kind === "自定义" ? "mine" : ""}" title="${esc(e.note || e.kind)}">${esc(e.title)}${e.id ? `<a data-act="cal-event-del" data-id="${e.id}" title="删除">×</a>` : ""}</span>`).join("")}</div>
+    ${d.posts.map((p) => chip("post", `${pfDot(p.platform)}${esc((p.title || "").replace(/#\S+/g, "").slice(0, 14))}`, p.content_id ? `data-act="open-content" data-id="${p.content_id}" title="已发 ${p.time}"` : `title="已发 ${p.time}"`)).join("")}
+    ${d.scheduled.map((p) => chip("sched", `${pfDot(p.platform)}定时 ${p.time} ${esc((p.title || "").slice(0, 10))}`)).join("")}
+    ${d.planned.filter((c) => !c.published).map((c) => chip("plan" + (d.past && !d.today ? " late" : ""), `${c.priority ? `<span class="tag pri-${c.priority}">${c.priority}</span> ` : ""}${esc(c.title.replace(/^【[^】]*】/, "").slice(0, 16))}<div class="sub">${esc(c.stage)}${c.has_script ? "" : " · 没稿"}</div>`, `data-act="open-content" data-id="${c.id}"`)).join("")}</div>`;
+  const cadence = C.cadence.length ? C.cadence.map((c) => `<span class="tag ${c.due ? "v-bad" : "v-good"}">${pfName(c.platform)} ${c.days === 0 ? "今天发过" : c.days + " 天没发"}</span>`).join(" ") : `<span class="sub">采集到作品后，这里会显示每个平台多久没发了。</span>`;
+  const upcoming = C.upcoming.filter((e) => e.in_days >= 0).slice(0, 6).map((e) => `<span class="tag ${e.planned ? "v-good" : ""}">${e.in_days === 0 ? "今天" : e.in_days + " 天后"} ${esc(e.title)}${e.planned ? " · 已排" : ""}</span>`).join(" ");
+  return `<div class="head"><h1>日历</h1><span class="sub">排了什么、发了什么、哪天有节点</span><span class="grow"></span>
+    <button data-act="cal-go" data-m="${C.prev}">‹ 上月</button><b style="min-width:110px;text-align:center">${C.label}</b><button data-act="cal-go" data-m="${C.next}">下月 ›</button>
+    <button data-act="cal-go" data-m="">回到本月</button></div>
+  <div class="card"><div class="row" style="flex-wrap:wrap"><b>发布节奏</b>${cadence}<span class="hint">超过 ${C.cadence_days} 天没发会提醒，可在设置里改</span></div>
+    ${upcoming ? `<div class="row" style="flex-wrap:wrap;margin-top:8px"><b>接下来的节点</b>${upcoming}</div>` : ""}</div>
+  <div class="card"><div class="cal-head">${["一", "二", "三", "四", "五", "六", "日"].map((w) => `<div>周${w}</div>`).join("")}</div>
+    <div class="cal-grid">${C.weeks.map((w) => w.map(cell).join("")).join("")}</div>
+    <p class="hint" style="margin-bottom:0">实心是已经发出去的作品，虚线是排了期还没发的选题（过期没发的会标红），点一下可以打开。节点只是提醒，和定位沾边才值得做。</p></div>
+  <div class="grid k2"><div class="card"><h2>还没排期的选题 ${C.unplanned.length ? C.unplanned.length + " 条" : ""}</h2>
+    ${C.unplanned.length ? C.unplanned.map((c) => `<div class="row"><span class="grow" data-act="open-content" data-id="${c.id}" style="cursor:pointer">${c.priority ? `<span class="tag pri-${c.priority}">${c.priority}</span> ` : ""}${esc(c.title.slice(0, 30))} <span class="sub">${esc(c.stage)}</span></span>
+      <input type="date" data-sched="${c.id}" style="width:150px"></div>`).join("") : `<p class="sub" style="margin:0">都排好了。</p>`}</div>
+  <div class="card"><h2>加一个自己的节点</h2><p class="hint">比如直播、课程开营、产品发布。到时候「今天」页会提前提醒。</p>
+    <div class="row"><input type="date" id="ev-date" style="width:150px"><div class="grow"><input id="ev-title" placeholder="节点名字" maxlength="30"></div><button data-act="cal-event-add">添加</button></div></div></div>`;
 }
 
 // ---------- 任务 / 设置 ----------
@@ -701,6 +781,9 @@ function settingsPage() {
     <label class="field"><span>每天几点之后采集（0-23）</span><input type="number" id="st-hour" min="0" max="23" value="${s.collect_hour}"></label>
     <label class="field"><span>每个账号每次最多采集多少条作品</span><input type="number" id="st-max" min="1" max="100" value="${s.max_posts}"></label>
     <label class="field"><input type="checkbox" id="st-headless" ${s.headless ? "checked" : ""}>采集时不显示浏览器窗口（采集总失败时可以取消勾选，看看页面停在哪）</label>
+    <label class="field"><input type="checkbox" id="st-hot-auto" ${s.hot_auto ? "checked" : ""}>工作台开着时每天刷新一次热榜</label>
+    <label class="field"><input type="checkbox" id="st-verify" ${s.verify_publish ? "checked" : ""}>发布后到作品列表里确认是不是真的发出去了</label>
+    <label class="field"><span>一个平台超过几天没发就提醒</span><input type="number" id="st-cadence" min="1" max="30" value="${s.cadence_days}"></label>
     <label class="field"><span>小红书封面比例</span><select id="st-xhs-ratio">${["3:4", "1:1", "4:3", "9:16"].map((r) => `<option ${r === s.xhs_cover_ratio ? "selected" : ""}>${r}</option>`).join("")}</select></label>
     <label class="field"><span>使用本机的 Chrome（可选，填 chrome.exe 的完整路径；留空用自带浏览器）</span><input id="st-chrome" value="${esc(s.chrome_path)}"></label>
   </div><div class="card"><h2>AI</h2>
@@ -736,7 +819,7 @@ function settingsPage() {
 }
 
 // ---------- 渲染与轮询 ----------
-const PAGES = { today: todayPage, playbook: playbookPage, dashboard, agent: agentPage, bench: benchPage, review: reviewPage, plan: planPage, create: createPage, comments: commentsPage, publish: publishPage, accounts: accountsPage, jobs: jobsPage, settings: settingsPage };
+const PAGES = { hot: hotPage, calendar: calendarPage, today: todayPage, playbook: playbookPage, dashboard, agent: agentPage, bench: benchPage, review: reviewPage, plan: planPage, create: createPage, comments: commentsPage, publish: publishPage, accounts: accountsPage, jobs: jobsPage, settings: settingsPage };
 function live() {
   const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
   set("live-publish", jobsTable(S.state.jobs.filter((j) => j.type === "publish").slice(0, 10), "还没有发布记录。"));
@@ -744,6 +827,7 @@ function live() {
   set("live-jobs", jobsTable(S.state.jobs, "还没有任务。"));
   const active = S.state.jobs.filter((j) => j.status === "pending" || j.status === "running").length;
   const badge = $("#job-badge"); badge.hidden = !active; badge.textContent = active;
+  const hb = $("#hot-badge"); if (hb) { hb.hidden = !S.state.hot_fit; hb.textContent = S.state.hot_fit; }
   const ag = (S.state.agent_pending || []).length, ab = $("#agent-badge"); ab.hidden = !ag; ab.textContent = ag;
 }
 function render() {
@@ -761,6 +845,8 @@ async function go(page) {
   if (page === "agent") S.agent = await api("/api/agent");
   if (page === "today") S.today = await api("/api/today");
   if (page === "playbook") S.playbook = await api("/api/playbook");
+  if (page === "hot") S.hot = await api("/api/hot");
+  if (page === "calendar") S.cal = await api("/api/calendar?month=" + (S.calMonth || ""));
   if (page === "settings") S.runners = await api("/api/ai/runners").catch(() => null);
   render();
 }
@@ -834,13 +920,17 @@ const ACTIONS = {
     const r = await api("/api/import", { path: $("#imp-path").value });
     toast(`导入 ${r.posts} 条作品，其中 ${r.tagged} 条带结构标签，${r.flagged} 条状态异常`); await refresh(); await go("dashboard");
   },
+  "publish-check": async () => { S.checkIssues = (await api("/api/publish/check", publishBody())).issues; render(); },
   publish: async () => {
-    const f = S.form;
-    const targets = Object.keys(f.targets).filter((k) => f.targets[k]).map((k) => { const [platform, ...rest] = k.split("/"); return { platform, account: rest.join("/"), draft: !!f.drafts[k] }; });
+    const f = S.form, body = publishBody(), targets = body.targets;
+    S.checkIssues = (await api("/api/publish/check", body)).issues; render();
+    const blocks = S.checkIssues.filter((i) => i.level === "block"), warns = S.checkIssues.filter((i) => i.level === "warn");
+    if (blocks.length) { toast(`有 ${blocks.length} 处要先改，见按钮下面的检查结果`); return; }
     const names = targets.map((t) => `${pfName(t.platform)}「${t.account}」${t.draft ? "（存草稿）" : ""}`).join("、");
-    if (targets.length && !confirm(`确认${f.schedule ? "定时 " + f.schedule.replace("T", " ") + " " : "立即"}发布到：${names}？`)) return;
-    await api("/api/publish", { kind: f.kind, files: f.files.split("\n"), cover: f.cover, cover_sec: f.cover_sec, cover_focus: f.cover_focus, cover_wide: f.cover_wide, cover_focus2: f.cover_focus2, cover_mode: f.cover_mode, title: f.title, desc: f.desc, tags: f.tags, schedule: f.schedule, headless: f.headless, targets, content_id: f.content_id });
-    toast("已加入发布队列"); await refresh();
+    const warnText = warns.length ? `\n\n有 ${warns.length} 条提醒（不改也能发）：\n${warns.map((w) => "· " + (w.platform ? pfName(w.platform) + "：" : "") + w.msg).join("\n")}` : "";
+    if (!confirm(`确认${f.schedule ? "定时 " + f.schedule.replace("T", " ") + " " : "立即"}发布到：${names}？${warnText}`)) return;
+    await api("/api/publish", body);
+    S.checkIssues = null; toast("已加入发布队列，发完会自动确认是否发出"); await refresh(); render();
   },
   "cover-preview": async () => { await coverPreview(); },
   "cover-focus": async (el, e) => {
@@ -901,6 +991,19 @@ const ACTIONS = {
     const { note } = await api("/api/agent/submit", { id: +el.dataset.id, text }); toast(note); await refresh(); await go(S.page);
     if (S.editing) { S.contents = (await api("/api/contents")).contents; openContent(S.contents.find((x) => x.id === S.editing.id)); }
   },
+  "hot-refresh": async () => { await api("/api/hot/refresh", {}); toast("正在刷新热榜…"); await refresh(); render(); },
+  "hot-judge": async () => { await api("/api/hot/judge", {}); toast(handedTo()); await refresh(); await go("hot"); },
+  "hot-pick": async (el) => {
+    const { id } = await api("/api/hot/to_content", { id: +el.dataset.id });
+    S.contents = (await api("/api/contents")).contents; S.hot = await api("/api/hot"); render();
+    toast("已转成选题，可以直接点「出稿」"); openContent(S.contents.find((c) => c.id === id));
+  },
+  "hot-ignore": async (el) => { await api("/api/hot/ignore", { id: +el.dataset.id }); await go("hot"); },
+  "hot-rss-add": async () => { await api("/api/hot/rss/add", { name: $("#rss-name").value, url: $("#rss-url").value }); toast("订阅已添加"); await go("hot"); },
+  "hot-rss-del": async (el) => { if (!confirm("删除这个订阅？")) return; await api("/api/hot/rss/delete", { id: +el.dataset.id }); await go("hot"); },
+  "cal-go": async (el) => { S.calMonth = el.dataset.m; await go("calendar"); },
+  "cal-event-add": async () => { await api("/api/calendar/event", { date: $("#ev-date").value, title: $("#ev-title").value }); toast("已添加"); await go("calendar"); },
+  "cal-event-del": async (el, e) => { e.stopPropagation(); await api("/api/calendar/event/delete", { id: +el.dataset.id }); await go("calendar"); },
   "agent-run": async (el) => { await api("/api/agent/run", { ids: [+el.dataset.id] }); toast(handedTo()); await refresh(); await go(S.page); },
   "agent-run-all": async () => { await api("/api/agent/run", {}); toast(handedTo()); await refresh(); await go("agent"); },
   "ai-test": async () => {
@@ -1032,7 +1135,7 @@ const ACTIONS = {
   },
   "save-settings": async (quiet) => {
     await api("/api/settings", { auto_collect: $("#st-auto").checked, collect_hour: +$("#st-hour").value, max_posts: +$("#st-max").value, headless: $("#st-headless").checked,
-      chrome_path: $("#st-chrome").value, xhs_cover_ratio: $("#st-xhs-ratio").value, ai_runner: $("#st-runner").value, ai_runner_cmd: $("#st-runner-cmd").value, ai_base_url: $("#st-url").value, ai_model: $("#st-model").value, ai_api_key: $("#st-key").value,
+      chrome_path: $("#st-chrome").value, hot_auto: $("#st-hot-auto").checked, verify_publish: $("#st-verify").checked, cadence_days: +$("#st-cadence").value, xhs_cover_ratio: $("#st-xhs-ratio").value, ai_runner: $("#st-runner").value, ai_runner_cmd: $("#st-runner-cmd").value, ai_base_url: $("#st-url").value, ai_model: $("#st-model").value, ai_api_key: $("#st-key").value,
       tikhub_api_key: $("#st-th-key").value, tikhub_base_url: $("#st-th-url").value, bench_hit_ratio: +$("#st-th-ratio").value,
       bench_pages: +$("#st-th-pages").value, bench_auto: $("#st-th-auto").checked });
     if (quiet === true) { await refresh(); return; }
@@ -1052,9 +1155,16 @@ document.addEventListener("input", (e) => {
   if (["cover", "files", "cover_sec", "cover_wide"].includes(t.dataset.f)) S.coverPreview = null;  // 来源变了，旧预览作废
   if (t.dataset.target) S.form.targets[t.dataset.target] = t.checked;
   if (t.dataset.draft) S.form.drafts[t.dataset.draft] = t.checked;
+  if (t.dataset.ptitle) S.form.ptitles[t.dataset.ptitle] = t.value;
+  if (t.dataset.f || t.dataset.target || t.dataset.ptitle) S.checkIssues = null;  // 表单改了，上次的检查结果作废
 });
 document.addEventListener("change", act(async (e) => {
   const t = e.target;
+  if (t.dataset.board) {
+    const on = [...document.querySelectorAll("[data-board]")].filter((x) => x.checked).map((x) => x.dataset.board);
+    await api("/api/hot/boards", { boards: on }); toast("来源已保存，点「刷新热榜」生效"); await go("hot"); return;
+  }
+  if (t.dataset.sched) { await api("/api/calendar/schedule", { id: +t.dataset.sched, date: t.value }); toast("已排到 " + t.value); await go("calendar"); return; }
   if (t.dataset.flag) {
     const [platform, ...rest] = t.dataset.flag.split("|");
     await api("/api/posts/flag", { platform, post_id: rest.join("|"), flag: t.value });

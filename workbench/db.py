@@ -52,6 +52,18 @@ CREATE TABLE IF NOT EXISTS api_calls (ts INTEGER, path TEXT, ok INTEGER, price R
 -- AI 待办：交给 AI 助手（Claude Code / Codex / WorkBuddy）做的事
 CREATE TABLE IF NOT EXISTS agent_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, ref TEXT, params TEXT DEFAULT '{{}}',
   status TEXT DEFAULT 'pending', note TEXT, created_at INTEGER, done_at INTEGER);
+-- 热点雷达：各平台热榜和 RSS 订阅里的条目；fit / angle / reason 是 AI 按定位卡判断的结果
+CREATE TABLE IF NOT EXISTS hot_topics (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, title TEXT, url TEXT, heat TEXT, rank INTEGER,
+  first_seen INTEGER, fetched_at INTEGER, fit TEXT, angle TEXT, reason TEXT, judged_at INTEGER, state TEXT DEFAULT 'new',
+  content_id INTEGER, UNIQUE (source, title));
+CREATE TABLE IF NOT EXISTS hot_sources (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, url TEXT, enabled INTEGER DEFAULT 1,
+  added_at INTEGER, last_fetch INTEGER, last_error TEXT);
+-- 日历上自己加的节点（节日和电商节点是内置的）
+CREATE TABLE IF NOT EXISTS cal_events (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, title TEXT, note TEXT DEFAULT '');
+-- 发布后回读：到平台的作品列表里确认这条真的发出去了
+CREATE TABLE IF NOT EXISTS publish_checks (job_id INTEGER PRIMARY KEY, platform TEXT, account TEXT, title TEXT, content_id INTEGER,
+  status TEXT, post_id TEXT, note TEXT, checked_at INTEGER);
+CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS comment_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, platforms TEXT,
   keywords TEXT, exclude TEXT DEFAULT '', templates TEXT DEFAULT '[]', use_ai INTEGER DEFAULT 0,
   auto_send INTEGER DEFAULT 0, daily_cap INTEGER DEFAULT 20, enabled INTEGER DEFAULT 1, is_intent INTEGER DEFAULT 0,

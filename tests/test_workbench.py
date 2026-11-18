@@ -893,3 +893,237 @@ def test_agent_run_api(api, con, tmp_path):
     assert api("/api/state")[1]["agent_pending"][0]["running"] is True
     assert api("/api/ai/test", {"runner": "custom"})[1]["reply"] == "好的"
     assert "found" in api("/api/ai/runners")[1]
+
+
+# ---------- 热点雷达 ----------
+BOARD_JSON = json.dumps({"code": 200, "data": [{"title": "Gemini 新模型或将发布", "hot": "12万", "url": "https://x/1"},
+                                               {"word": "某地发生事故", "hot_value": 12031447}, "只有标题的一条"]}).encode()
+RSS_XML = """<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+<item><title>开源剪辑工具发布 2.0</title><link>https://b/1</link></item><item><title> 第二条 </title><link>https://b/2</link></item></channel></rss>""".encode()
+ATOM_XML = """<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Atom 条目</title><link href="https://c/1"/></entry></feed>""".encode()
+
+
+def test_hot_parsers():
+    from workbench import hot
+    items = hot.parse_board(json.loads(BOARD_JSON))
+    assert [i["title"] for i in items] == ["Gemini 新模型或将发布", "某地发生事故", "只有标题的一条"]
+    assert items[0]["heat"] == "12万" and items[1]["heat"] == "1203万" and items[0]["url"] == "https://x/1"
+    assert [i["title"] for i in hot.parse_rss(RSS_XML)] == ["开源剪辑工具发布 2.0", "第二条"]
+    assert hot.parse_rss(ATOM_XML) == [{"title": "Atom 条目", "url": "https://c/1", "heat": ""}]
+    with pytest.raises(ValueError):
+        hot.http_get("file:///etc/passwd")
+
+
+def test_hot_refresh_judge_and_to_content(con, monkeypatch):
+    from workbench import agent, hot
+    def fake_get(url, timeout=15):
+        if "weibohot" in url:
+            return BOARD_JSON
+        if url == "https://feed/ok":
+            return RSS_XML
+        raise OSError("接口挂了")
+    monkeypatch.setattr(hot, "http_get", fake_get)
+    config.save_settings({"hot_boards": "weibo,douyin"})
+    rid = hot.add_rss(con, "行业周报", "https://feed/ok")
+    with pytest.raises(OSError):
+        hot.add_rss(con, "坏的", "https://feed/bad")
+    logs = []
+    ok, new = hot.refresh(con, log=logs.append)
+    assert ok == 2 and new == 3 and any("抖音热点：没读到" in m for m in logs)  # 一个榜挂了不影响别的
+    v = hot.view(con)
+    assert [g["name"] for g in v["groups"]] == ["微博热搜", "抖音热点", "行业周报"] and v["unjudged"] == 5
+    ids = [r["id"] for r in hot.unjudged(con)]
+    tid = agent.create(con, "hot", "h1", {"ids": ids})
+    brief = agent.brief(con, tid)
+    assert "不碰" in brief and "宁少AI进化论" in brief and "Gemini 新模型或将发布" in brief
+    by = {r["title"]: r["id"] for r in db.rows(con, "SELECT id, title FROM hot_topics")}
+    with pytest.raises(ValueError):
+        agent.submit(con, tid, "都挺好的")
+    note = agent.submit(con, tid, f"{by['Gemini 新模型或将发布']}｜中｜模型又换代，剪口播还是卡一天？｜AI 受众关心\n"
+                                  f"{by['某地发生事故']}｜不碰｜｜灾难事故\n{by['开源剪辑工具发布 2.0']}|高|我用它一小时剪完一条口播|直接相关\n999｜高｜乱写的｜不在列表里")
+    assert note == "看了 3 个热点，2 个适合做"
+    picked = hot.view(con)["picked"]
+    assert [p["fit"] for p in picked] == ["高", "中"] and picked[0]["source_name"] == "行业周报"
+    cid = hot.to_content(con, picked[0]["id"])
+    c = contents.get(con, cid)
+    assert c["title"] == "我用它一小时剪完一条口播" and c["source"] == "hot" and "先核实" in c["notes"] and c["targets"]
+    assert hot.to_content(con, picked[0]["id"]) == cid  # 不重复建
+    assert rid and db.rows(con, "SELECT state FROM hot_topics WHERE content_id=?", cid)[0]["state"] == "picked"
+
+
+def test_hot_api(api, con, monkeypatch):
+    from workbench import hot
+    monkeypatch.setattr(hot, "http_get", lambda url, timeout=15: BOARD_JSON)
+    assert api("/api/hot/refresh", {})[1]["job"]
+    hot.refresh(con, log=lambda m: None)
+    body = api("/api/hot")[1]
+    assert body["groups"][0]["items"][0]["title"] == "Gemini 新模型或将发布"
+    assert api("/api/hot/judge", {})[1]["task"]
+    tid = body["groups"][0]["items"][0]["id"]
+    cid = api("/api/hot/to_content", {"id": tid})[1]["id"]
+    assert contents.get(con, cid)["title"] == "Gemini 新模型或将发布"
+    assert api("/api/hot/boards", {"boards": ["baidu", "nope"]})[0] == 200 and config.load_settings()["hot_boards"] == "baidu"
+
+
+# ---------- 发布前检查 ----------
+def test_precheck_blocks_and_warns(con, tmp_path):
+    from workbench import precheck
+    video = tmp_path / "a.mp4"; video.write_bytes(b"x")
+    base = {"kind": "video", "files": [str(video)], "title": "不会剪辑反而更适合 AI 剪", "desc": "四步流程。评论区打 skill，去主页置顶领。",
+            "tags": "AI剪辑 口播", "cover": "c.jpg", "content_id": 1,
+            "targets": [{"platform": "xhs", "account": "主号"}, {"platform": "douyin", "account": "主号"}, {"platform": "channels", "account": "主号"}]}
+    assert precheck.check(con, base) == []
+    levels = lambda **kw: [(i["level"], i["platform"], i["msg"][:14]) for i in precheck.check(con, dict(base, **kw))]
+    long = "这是一个超过三十个字的标题，小红书肯定会拦下来，抖音会把后面的字截掉看不到"
+    got = levels(title=long)
+    assert ("block", "xhs", "小红书标题最多 20 字，现") in got and ("warn", "douyin", "抖音标题最多 30 字，现在") in got
+    # 给小红书单独填一个短标题就能过
+    ok = precheck.check(con, dict(base, title=long[:28], targets=[{"platform": "xhs", "account": "主号", "title": "短标题"}, {"platform": "channels", "account": "主号"}]))
+    assert not [i for i in ok if i["level"] == "block"]
+    for bad, word in [("加我微信 ning_ai2026 领", "微信号"), ("详情 https://example.com/x", "外部链接"), ("电话 13800138000", "手机号"), ("key 是 sk-abcdefghijklmnopqrstuv", "API 密钥")]:
+        issues = precheck.check(con, dict(base, desc=bad))
+        assert any(i["level"] == "block" and word in i["msg"] for i in issues), bad
+    assert any(i["level"] == "warn" and "本机路径" in i["msg"] for i in precheck.check(con, dict(base, desc="素材在 C:\\Users\\ning\\Desktop 里")))
+    assert any("绝对化" in i["msg"] for i in precheck.check(con, dict(base, desc="全网第一的方法")))
+    assert ("block", None, "这不像视频文件：a.txt。") in [(i["level"], i["platform"], i["msg"][:16]) for i in precheck.check(con, dict(base, files=[str(tmp_path / "a.txt")]))] \
+        or any("找不到文件" in i["msg"] for i in precheck.check(con, dict(base, files=[str(tmp_path / "a.txt")])))
+    past = time.strftime("%Y-%m-%dT%H:%M", time.localtime(time.time() - 3600))
+    assert any(i["level"] == "block" and "定时发布" in i["msg"] for i in precheck.check(con, dict(base, schedule=past)))
+    warns = [i["msg"] for i in precheck.check(con, dict(base, tags="", cover="", content_id=None))]
+    assert len(warns) == 3 and all(i["level"] == "warn" for i in precheck.check(con, dict(base, tags="", cover="", content_id=None)))
+    jobs.enqueue(con, "publish", {"platform": "douyin", "account": "主号", "title": base["title"]})
+    assert any("已经发过同样的标题" in i["msg"] for i in precheck.check(con, base))
+
+
+def test_publish_api_runs_precheck(api, con, tmp_path):
+    video = tmp_path / "a.mp4"; video.write_bytes(b"x")
+    api("/api/accounts/add", {"platform": "xhs", "account": "主号"})
+    body = {"kind": "video", "files": [str(video)], "title": "标题", "desc": "加我微信 ning_ai2026", "targets": [{"platform": "xhs", "account": "主号"}]}
+    status, out = api("/api/publish", body)
+    assert status == 400 and "发布前检查没通过" in out["error"] and "微信号" in out["error"]
+    issues = api("/api/publish/check", dict(body, desc="正常的简介"))[1]["issues"]
+    assert issues and all(i["level"] == "warn" for i in issues)
+
+
+# ---------- 发布后回读 ----------
+def test_verify_match():
+    from workbench import verify
+    now = int(time.time() * 1000)
+    posts = [{"post_id": "old", "title": "不会剪辑反而更适合 AI 剪 #AI剪辑", "post_time": now - 3 * 86400000},
+             {"post_id": "new", "title": "不会剪辑反而更适合 AI 剪！四步流程 #AI剪辑 #口播", "post_time": now + 60000},
+             {"post_id": "other", "title": "完全无关的另一条", "post_time": now + 60000}]
+    assert verify.match(posts, "不会剪辑反而更适合 AI 剪", "", now)["post_id"] == "new"  # 三天前那条同名的不算
+    assert verify.match(posts, "别的标题", "四步流程", now) is None
+    assert verify.match([{"post_id": "d", "title": "四步流程讲清楚口播怎么剪 #AI", "post_time": now}], "短标题", "四步流程讲清楚口播怎么剪", now)["post_id"] == "d"  # 抖音列表里显示的是简介
+
+
+def test_verify_flow_confirms_links_and_retries(con, monkeypatch):
+    from workbench import verify
+    cid = contents.save(con, {"title": "回读测试"})
+    p = {"platform": "douyin", "account": "主号", "title": "回读测试的标题", "desc": "", "content_id": cid}
+    assert verify.plan(con, 1, dict(p, draft=True)) is None and verify.plan(con, 2, dict(p, schedule="2030-01-01T10:00")) is None
+    assert [r["status"] for r in db.rows(con, "SELECT status FROM publish_checks ORDER BY job_id")] == ["skipped", "scheduled"]
+    check = verify.plan(con, 3, p)
+    assert check["not_before"] > verify.now_ms() + 60000 and check["attempt"] == 0
+    monkeypatch.setattr(collect, "list_posts", lambda *a, **k: [])
+    logs = []
+    result, again = verify.run(con, check, log=logs.append)
+    assert result == "waiting" and again["attempt"] == 1 and "还没看到" in logs[-1]
+    result, again = verify.run(con, again, log=logs.append)
+    assert result == "waiting" and again["attempt"] == 2
+    result, again = verify.run(con, again, log=logs.append)
+    assert result == "unverified" and again is None and "请到平台的作品管理里看一眼" in logs[-1]
+    monkeypatch.setattr(collect, "list_posts", lambda *a, **k: [{"post_id": "dy9", "title": "回读测试的标题 #AI", "post_time": verify.now_ms()}])
+    result, again = verify.run(con, check, log=logs.append)
+    assert result == "confirmed" and again is None
+    assert db.rows(con, "SELECT status, post_id FROM publish_checks WHERE job_id=3") == [{"status": "confirmed", "post_id": "dy9"}]
+    assert db.rows(con, "SELECT content_id FROM content_posts WHERE post_id='dy9'") == [{"content_id": cid}] and contents.get(con, cid)["stage"] == "数据验收"
+    def expired(*a, **k):
+        raise collect.NotLoggedIn("登录已过期")
+    monkeypatch.setattr(collect, "list_posts", expired)
+    assert verify.run(con, dict(check, publish_job=4), log=logs.append)[0] == "login"
+    config.save_settings({"verify_publish": False})
+    assert verify.plan(con, 5, p) is None
+
+
+def test_delayed_jobs_wait_without_blocking_others(con):
+    a = jobs.enqueue(con, "verify", {"not_before": jobs.now_ms() + 600000})
+    b = jobs.enqueue(con, "review", {"days": 7})
+    w = jobs.Worker()
+    ready = [j["id"] for j in db.rows(con, f"SELECT * FROM jobs WHERE status='pending' AND {w.where[0]} ORDER BY id", *w.where[1])
+             if (json.loads(j["params"]).get("not_before") or 0) <= jobs.now_ms()]
+    assert ready == [b] and a not in ready
+
+
+@pytest.mark.parametrize("platform", list(config.PLATFORMS))
+def test_list_posts_reads_only_the_list_on_fake_site(platform, fake_site, con, tmp_path):
+    posts = collect.list_posts(platform, "回读测试", log=lambda m: None, state_file=state_file(tmp_path, True))
+    assert len(posts) == sum(platform in w[-1] for w in demo.WORKS)
+    assert all(p["post_id"] and p["title"] for p in posts) and posts == sorted(posts, key=lambda p: -p["post_time"])
+    assert not (config.DATA / "raw" / platform / "回读测试").exists()  # 不动完整采集的数据
+
+
+# ---------- 内容日历 ----------
+def test_calendar_month_events_and_cadence(con):
+    from workbench import cal
+    m = cal.month(con, "2027-02")
+    days = {d["date"]: d for w in m["weeks"] for d in w}
+    assert m["label"] == "2027 年 2 月" and m["prev"] == "2027-01" and m["next"] == "2027-03" and len(m["weeks"][0]) == 7
+    assert [e["title"] for e in days["2027-02-06"]["events"]] == ["春节"] and [e["title"] for e in days["2027-02-14"]["events"]] == ["情人节"]
+    assert cal.nth_weekday(2027, 5, 6, 2).isoformat() == "2027-05-09"  # 母亲节
+    cid = contents.save(con, {"title": "排在春节那天", "schedule_date": "2027-02-06"})
+    free = contents.save(con, {"title": "还没排期"})
+    t = int(time.mktime((2027, 2, 8, 20, 0, 0, 0, 0, -1)) * 1000)
+    with con:
+        con.execute("INSERT INTO accounts (platform, account, status) VALUES ('channels', '主号', 'ok')")
+        con.execute("INSERT INTO posts (platform, post_id, account, title, post_time) VALUES ('channels', 'p1', '主号', '已发的一条', ?)", (t,))
+        con.execute("INSERT INTO cal_events (date, title) VALUES ('2027-02-10', '课程开营')")
+    jobs.enqueue(con, "publish", {"platform": "douyin", "account": "主号", "title": "定时的", "schedule": "2027-02-12T18:00"})
+    with con:
+        con.execute("UPDATE jobs SET status='done'")
+    m = cal.month(con, "2027-02")
+    days = {d["date"]: d for w in m["weeks"] for d in w}
+    assert days["2027-02-06"]["planned"][0]["id"] == cid and days["2027-02-08"]["posts"][0]["title"] == "已发的一条"
+    assert days["2027-02-10"]["events"][0]["kind"] == "自定义" and days["2027-02-12"]["scheduled"][0]["time"] == "18:00"
+    assert [c["id"] for c in m["unplanned"]] == [free]
+    with con:
+        con.execute("UPDATE posts SET post_time=?", (int(time.time() * 1000) - 6 * 86400000,))
+    assert cal.cadence(con) == [{"platform": "channels", "account": "主号", "days": 6, "last": cal.cadence(con)[0]["last"], "due": True}]
+    assert cal.month(con, "乱写")["month"] == time.strftime("%Y-%m")
+
+
+def test_calendar_api_and_today_reminders(api, con):
+    cid = contents.save(con, {"title": "待排期"})
+    assert api("/api/calendar/schedule", {"id": cid, "date": "2027-03-01"})[0] == 200 and contents.get(con, cid)["schedule_date"] == "2027-03-01"
+    assert api("/api/calendar/schedule", {"id": cid, "date": "3月1日"})[0] == 400
+    assert api("/api/calendar/event", {"date": "2027-03-02", "title": "直播"})[0] == 200
+    m = api("/api/calendar?month=2027-03")[1]
+    days = {d["date"]: d for w in m["weeks"] for d in w}
+    assert days["2027-03-01"]["planned"][0]["id"] == cid and days["2027-03-02"]["events"][0]["title"] == "直播"
+    assert api("/api/calendar/event/delete", {"id": days["2027-03-02"]["events"][0]["id"]})[0] == 200
+    # 今天页：太久没发、有适合的热点、有没确认的发布，都会提醒
+    demo.load_demo(con)
+    with con:
+        con.execute("INSERT INTO accounts (platform, account, status) VALUES ('channels', '主号', 'ok')")
+        con.execute("INSERT INTO posts (platform, post_id, account, title, post_time) VALUES ('channels', 'old1', '主号', '很久以前', ?)", (int(time.time() * 1000) - 9 * 86400000,))
+        con.execute("INSERT INTO hot_topics (source, title, fit, state, fetched_at) VALUES ('weibo', '一个适合的热点', '高', 'new', ?)", (int(time.time() * 1000),))
+        con.execute("INSERT INTO publish_checks (job_id, platform, account, title, status, checked_at) VALUES (9, 'douyin', '主号', '没找到的那条', 'unverified', ?)", (int(time.time() * 1000),))
+    from workbench import guide
+    kinds = {s["kind"]: s for s in guide.next_steps(con)[0]}
+    assert "verify" in kinds and kinds["verify"]["urgent"]
+    all_steps = api("/api/state")[1]
+    assert all_steps["hot_fit"] == 1
+
+
+def test_publish_job_queues_a_verify_job(con, monkeypatch):
+    monkeypatch.setattr(jobs.Worker, "sau", lambda self, con, job_id, platform, action, account, extra=(): 0)
+    w = jobs.Worker()
+    p = {"platform": "douyin", "account": "主号", "kind": "video", "files": ["a.mp4"], "title": "发完要确认", "desc": ""}
+    jid = jobs.enqueue(con, "publish", p)
+    assert w.run_job(con, db.rows(con, "SELECT * FROM jobs WHERE id=?", jid)[0])
+    queued = [json.loads(j["params"]) for j in db.rows(con, "SELECT params FROM jobs WHERE type='verify'")]
+    assert len(queued) == 1 and queued[0]["publish_job"] == jid and queued[0]["not_before"] > jobs.now_ms()
+    assert db.rows(con, "SELECT status FROM publish_checks WHERE job_id=?", jid) == [{"status": "waiting"}]
+    jid2 = jobs.enqueue(con, "publish", dict(p, schedule="2030-01-01T10:00"))
+    w.run_job(con, db.rows(con, "SELECT * FROM jobs WHERE id=?", jid2)[0])
+    assert len(db.rows(con, "SELECT 1 FROM jobs WHERE type='verify'")) == 1  # 定时发布的不马上回读

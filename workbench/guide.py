@@ -80,9 +80,23 @@ def next_steps(con):
     if need_script:
         add("script", f"给 {len(need_script)} 条选题出稿", "一键出稿：结构、标题、三平台结尾、发布文案一次出齐。",
             {"label": "全部出稿", "act": "script-all", "ids": [c["id"] for c in need_script]}, len(need_script))
-    if agent_pending:
+    from . import agent as agent_mod, cal, hot
+    who = agent_mod.auto_name()
+    running = set()
+    for j in rows(con, "SELECT params FROM jobs WHERE type='agent_auto' AND status IN ('pending','running')"):
+        running.update(json.loads(j["params"]).get("tasks", []))
+    stuck = [t["id"] for t in rows(con, "SELECT id FROM agent_tasks WHERE status='pending'") if t["id"] not in running]
+    if stuck and who:
+        add("agent", f"有 {len(stuck)} 条 AI 待办没处理成", f"可以让 {who} 再试一次，或者到「AI 待办」页手动处理。", {"label": "去看看", "page": "agent"}, len(stuck))
+    elif agent_pending and not who:
         add("agent", f"让 AI 助手处理 {agent_pending} 条 AI 待办", "在 Claude Code / Codex / WorkBuddy 里打开 NingLoop 文件夹，说「处理 NingLoop 的 AI 待办」。",
             {"label": "复制这句话", "act": "copy-ask"}, agent_pending)
+
+    unverified = rows(con, "SELECT title, platform FROM publish_checks WHERE status IN ('unverified','login') AND checked_at>=? ORDER BY checked_at DESC", now_ms() - 3 * DAY)
+    if unverified:
+        u = unverified[0]
+        add("verify", f"确认「{u['title'][:20]}」有没有发出去", f"发布引擎说成功了，但在{config.PLATFORMS[u['platform']]['name']}的作品列表里没找到。到平台的作品管理里看一眼。",
+            {"label": "看任务记录", "page": "jobs"}, len(unverified), urgent=True)
 
     producing = []
     for c in items:
@@ -115,6 +129,18 @@ def next_steps(con):
             f"数据到了：{c['acceptance_result']['overall']}。写一句结论，打法库会记下这次改动有没有用。",
             {"label": "看结果", "content": c["id"]}, len(to_conclude))
 
+    due = [c for c in cal.cadence(con) if c["due"]]
+    if due and not to_publish:
+        worst = max(due, key=lambda c: c["days"])
+        add("cadence", f"{config.PLATFORMS[worst['platform']]['name']}已经 {worst['days']} 天没发了", "断更会掉推荐。看看日历上最近排了什么，没有就从热点或待排期的选题里挑一条。",
+            {"label": "看日历", "page": "calendar"})
+    soon = [e for e in cal.upcoming(con, 7) if not e["planned"] and e["kind"] != "自定义" and 2 <= e["in_days"] <= 7]
+    if soon:
+        e = soon[0]
+        add("event", f"{e['in_days']} 天后是{e['title']}", "节点有流量，但只有和你的定位沾边才值得做。不沾边就跳过。", {"label": "看日历", "page": "calendar"})
+    hot_fit = rows(con, "SELECT COUNT(*) AS n FROM hot_topics WHERE fit='高' AND state='new' AND content_id IS NULL AND fetched_at>=?", now_ms() - 2 * DAY)[0]["n"]
+    if hot_fit:
+        add("hot", f"有 {hot_fit} 个热点适合你做", "AI 按定位卡挑出来的。热点有时效，想做就在 48 小时内发出去。", {"label": "看热点", "page": "hot"}, hot_fit)
     new_hits = rows(con, """SELECT COUNT(*) AS n FROM bench_posts WHERE status='new' AND first_seen>=?""", now_ms() - 7 * DAY)[0]["n"]
     if new_hits:
         add("bench", "看看对标号这周的新作品", "爆款拆成结构，拆过的会进下周计划。", {"label": "去看对标", "page": "bench"})

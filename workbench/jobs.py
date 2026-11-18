@@ -14,7 +14,7 @@ import time
 
 from . import agent, config, contents, db, method, planner, review
 
-AI_TYPES = ("agent_auto",)
+AI_TYPES = ("agent_auto", "hot")  # 不开浏览器的任务：AI 待办、刷新热榜
 ENV = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
 
 
@@ -137,6 +137,12 @@ class Worker(threading.Thread):
             if p.get("covers") and COVER_SKIPPED.search(log):  # 引擎设封面失败时只记一行警告然后照常发布，这里把它挑出来
                 self.log(con, job_id, "⚠ 封面没有设上：平台用了默认封面。请到平台的作品管理里手动换成 data/covers 里生成好的那张："
                                       + "；".join(p["covers"].values()))
+            if code == 0:  # 引擎说成功了，再到作品列表里确认一遍
+                from . import verify
+                check = verify.plan(con, job_id, p)
+                if check:
+                    enqueue(con, "verify", check)
+                    self.log(con, job_id, "已提交。2 分钟后会到作品列表里确认是不是真的发出去了（见下面的「确认发出」任务）。")
             if code != 0:
                 self.log(con, job_id, "发布没有成功。如果上面提示 cookie 缺失或过期，请到「账号」页重新扫码登录；"
                                       "否则可以取消勾选「后台运行」再发一次，看看浏览器停在哪一步。")
@@ -145,6 +151,21 @@ class Worker(threading.Thread):
             code = self.spawn(con, job_id, [sys.executable, "-m", "workbench", "collect", "--platform", p["platform"], "--account", p["account"]],
                               config.ROOT)
             return code == 0
+        if kind == "verify":
+            from . import verify
+            result, again = verify.run(con, p, log=lambda m: self.log(con, job_id, m))
+            if again:
+                enqueue(con, "verify", again)
+            return result in ("confirmed", "waiting")
+        if kind == "hot":
+            from . import hot
+            ok, new = hot.refresh(con, log=lambda m: self.log(con, job_id, m))
+            self.log(con, job_id, f"刷新了 {ok} 个来源，新上榜 {new} 条")
+            if p.get("judge") and agent.auto_name():  # 顺手让 AI 挑一遍
+                ids = [r["id"] for r in hot.unjudged(con)]
+                if ids:
+                    enqueue(con, "agent_auto", {"tasks": [agent.create(con, "hot", f"hot-{now_ms()}", {"ids": ids})]})
+            return ok > 0
         if kind == "review":
             review_id = review.create(con, p.get("days") or None)
             self.log(con, job_id, f"复盘已生成（编号 {review_id}）")
@@ -195,6 +216,8 @@ class Worker(threading.Thread):
         if s["bench_auto"] and s["tikhub_api_key"] and db.rows(con, "SELECT 1 FROM benchmarks WHERE enabled=1 LIMIT 1") \
                 and not db.rows(con, "SELECT 1 FROM jobs WHERE type='bench' AND created_at>=? LIMIT 1", midnight):
             enqueue(con, "bench", {"auto": True})
+        if s["hot_auto"] and not db.rows(con, "SELECT 1 FROM jobs WHERE type='hot' AND created_at>=? LIMIT 1", midnight):
+            enqueue(con, "hot", {"auto": True})
 
     def run(self):
         con = db.connect()
@@ -206,7 +229,9 @@ class Worker(threading.Thread):
             try:
                 if not self.ai:
                     self.auto_collect(con)
-                job = (db.rows(con, f"SELECT * FROM jobs WHERE status='pending' AND {where} ORDER BY id LIMIT 1", *args) or [None])[0]
+                # 带 not_before 的任务（比如发布后的核验）到点才执行，不挡住后面的
+                job = next((j for j in db.rows(con, f"SELECT * FROM jobs WHERE status='pending' AND {where} ORDER BY id LIMIT 20", *args)
+                            if (json.loads(j["params"]).get("not_before") or 0) <= now_ms()), None)
                 if job is None:
                     time.sleep(1)
                     continue
