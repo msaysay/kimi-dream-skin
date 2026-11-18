@@ -129,6 +129,9 @@ def next_steps(con):
             f"数据到了：{c['acceptance_result']['overall']}。写一句结论，打法库会记下这次改动有没有用。",
             {"label": "看结果", "content": c["id"]}, len(to_conclude))
 
+    waiting = rows(con, "SELECT COUNT(*) AS n FROM insights WHERE status='proposed'")[0]["n"]
+    if waiting:
+        add("insight", f"确认 {waiting} 条复盘洞察", "AI 复盘里提炼出来的做法。你点头的才会记进打法库，之后出稿会优先照着做。", {"label": "去确认", "page": "review"}, waiting)
     due = [c for c in cal.cadence(con) if c["due"]]
     if due and not to_publish:
         worst = max(due, key=lambda c: c["days"])

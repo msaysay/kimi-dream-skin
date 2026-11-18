@@ -63,6 +63,9 @@ CREATE TABLE IF NOT EXISTS cal_events (id INTEGER PRIMARY KEY AUTOINCREMENT, dat
 -- 发布后回读：到平台的作品列表里确认这条真的发出去了
 CREATE TABLE IF NOT EXISTS publish_checks (job_id INTEGER PRIMARY KEY, platform TEXT, account TEXT, title TEXT, content_id INTEGER,
   status TEXT, post_id TEXT, note TEXT, checked_at INTEGER);
+-- 复盘里提炼出来、人工确认过的经验（和按数据自动算出来的打法分开放）
+CREATE TABLE IF NOT EXISTS insights (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, basis TEXT DEFAULT '', source TEXT,
+  status TEXT DEFAULT 'proposed', created_at INTEGER, decided_at INTEGER);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS comment_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, platforms TEXT,
   keywords TEXT, exclude TEXT DEFAULT '', templates TEXT DEFAULT '[]', use_ai INTEGER DEFAULT 0,
@@ -84,7 +87,7 @@ def connect():
 
 
 # 老版本建的表缺的列：启动时补上，已有数据不动
-COLUMNS = {"contents": {"experiment": "TEXT", "conclusion": "TEXT", "pub_desc": "TEXT", "pub_tags": "TEXT"}}
+COLUMNS = {"bench_posts": {"text": "TEXT"}, "contents": {"experiment": "TEXT", "conclusion": "TEXT", "pub_desc": "TEXT", "pub_tags": "TEXT"}}
 
 
 def migrate(con):

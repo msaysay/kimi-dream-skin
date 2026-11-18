@@ -196,3 +196,7 @@ details.card > summary { cursor: pointer; }
 .cal-it.plan { border: 1px dashed var(--axis); cursor: pointer; } .cal-it.plan.late { border-color: var(--bad); }
 .cal-it[data-act] { cursor: pointer; }
 .hot-pick > .grow { flex: 1; min-width: 0; }
+.insights { border: 1px solid var(--accent); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; }
+.insight { display: flex; gap: 10px; align-items: center; padding: 6px 0; }
+.insight + .insight { border-top: 1px solid var(--line); }
+.insight > .grow { flex: 1; min-width: 0; }

@@ -9,6 +9,11 @@ import urllib.request
 
 from . import analytics, config, method
 
+
+def bench_times(p):
+    from .benchmarks import times
+    return times(p)
+
 SYSTEM_PROMPT = """你是短视频运营复盘顾问，严格按用户给的方法论执行，不自造标签、不改口径。
 规则：
 1. 三个平台的绝对量和比率不能相加、不能横向比数值，只能比结构（占比）和同平台内的排名。
@@ -73,7 +78,7 @@ def summarize(data, plan=(), accepted=(), questions=(), bench=None):
                           "rec_share": p["rec_share"], "social_share": p["social_share"], "intent_comments": p["intent"]})
     return {"days": data["days"], "profile_gaps": data["profile_gaps"], "checks": data["checks"],
             "benchmark_hits": [{"platform": p["platform"], "account": p["bench_name"], "title": clean(p["title"], 40), "interactions": p["inter"],
-                                "times_account_median": round(p["ratio"], 1), "tags": p["tags"]} for p in (bench or {}).get("hits", [])[:8]],
+                                "times_account_median": round(p["ratio"], 1) if p.get("ratio") else None, "pasted": bool(p.get("pasted")), "tags": p["tags"]} for p in (bench or {}).get("hits", [])[:8]],
             "platform_summary": {names[k]: v for k, v in data["summary"].items()}, "posts": posts,
             "matrix": data["matrix"], "last_plan_acceptance": list(accepted), "comment_questions": list(questions)[:10],
             "plan_candidates": [{k: c[k] for k in ("priority", "title", "tags", "change", "acceptance")} for c in plan]}
@@ -88,7 +93,7 @@ def rule_report(data, plan=(), notes=(), accepted=(), questions=(), bench=None, 
     if not shown:
         L.append("这段时间没有自己的作品数据。先在「账号」页登录并采集一次数据。")
         if bench and bench["hits"]:  # 刚起步还没数据时，对标爆款是最快的选题来源
-            L += ["", "## 对标信号", ""] + [f"- {names[p['platform']]}「{p['bench_name']}」：{clean(p['title'], 30)}，是该号中位数的 {p['ratio']:.1f} 倍"
+            L += ["", "## 对标信号", ""] + [f"- {names[p['platform']]}「{p['bench_name']}」：{clean(p['title'], 30)}，{bench_times(p)}"
                                            for p in bench["hits"][:8]]
             L.append("\n到「对标」页拆解这些爆款，拆解过的会进下周计划。")
         return "\n".join(L)
@@ -179,7 +184,7 @@ def rule_report(data, plan=(), notes=(), accepted=(), questions=(), bench=None, 
         L += ["", "## 7b 对标信号", ""]
         for p in bench["hits"][:5]:
             L.append(f"- {names[p['platform']]}「{p['bench_name']}」：{clean(p['title'], 30)}，互动 {fmt(p['inter'])}，"
-                     f"是该号中位数的 {p['ratio']:.1f} 倍" + (f"，结构 {' × '.join(v for v in (p['tags'].get('archetype'), p['tags'].get('hook_open'), p['tags'].get('hook_end')) if v)}" if p["tags"] else "，未拆解"))
+                     f"{bench_times(p)}" + (f"，结构 {' × '.join(v for v in (p['tags'].get('archetype'), p['tags'].get('hook_open'), p['tags'].get('hook_end')) if v)}" if p["tags"] else "，未拆解"))
         st = bench["structure"]
         if st["tagged"]:
             top = lambda field: "、".join(f"{v}（{n}）" for v, n in st[field][:3]) or "—"
@@ -225,13 +230,15 @@ def gather(con, days):
     plan, notes = planner.candidates(data, questions, prefs)
     bench_items, bench_notes = benchmarks.plan_candidates(con, days or 30)
     return {"data": data, "plan": plan + bench_items, "notes": notes + bench_notes, "accepted": last_acceptance(con),
-            "questions": questions, "bench": benchmarks.load(con, days or 30), "lessons": playbook.lessons(con)}
+            "questions": questions, "bench": benchmarks.load(con, days or 30), "lessons": playbook.lessons(con), "insights": playbook.insights(con, "kept")}
 
 
 def ai_brief(g):
     """交给 AI 写复盘时的完整说明（规则、字典、定位卡、数据摘要）。"""
     summary = summarize(g["data"], g["plan"], g["accepted"], g["questions"], g["bench"])
-    return "\n\n".join([SYSTEM_PROMPT, method.dictionary_text(), method.profile_text(method.load_profile()),
+    kept = g.get("insights") or []
+    known = ("记下的经验（之前的复盘里确认过的，这次看看数据是否还支持）：\n" + "\n".join(f"- {x['text']}" for x in kept[:10])) if kept else ""
+    return "\n\n".join([SYSTEM_PROMPT, method.dictionary_text(), method.profile_text(method.load_profile()), *([known] if known else []),
                          "数据摘要（JSON）：", json.dumps(summary, ensure_ascii=False, default=str)])
 
 

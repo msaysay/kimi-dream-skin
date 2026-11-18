@@ -210,6 +210,7 @@ def api_post(con, worker, path, body):
         return {"job": jobs.enqueue(con, "review", {"days": days})}
     if path == "/api/reviews/delete":
         with con:
+            con.execute("DELETE FROM insights WHERE source=? AND status='proposed'", (f"review:{body.get('id')}",))
             con.execute("DELETE FROM reviews WHERE id=?", (body.get("id"),))
         return {"ok": True}
     if path == "/api/settings":
@@ -313,6 +314,27 @@ def api_post(con, worker, path, body):
         except ValueError as e:
             raise ApiError(str(e))
         return {"ok": True}
+    if path == "/api/insights/decide":
+        try:
+            playbook.decide_insight(con, body["id"], body.get("status"))
+        except ValueError as e:
+            raise ApiError(str(e))
+        return {"ok": True}
+    if path == "/api/insights/add":
+        try:
+            return {"id": playbook.add_insight(con, body.get("text"), body.get("basis"))}
+        except ValueError as e:
+            raise ApiError(str(e))
+    if path == "/api/insights/delete":
+        with con:
+            con.execute("DELETE FROM insights WHERE id=?", (int(body["id"]),))
+        return {"ok": True}
+    if path == "/api/bench/paste":
+        try:
+            pf, pid = benchmarks.paste(con, body.get("platform"), body.get("text"), body.get("url") or "", body.get("author") or "", body.get("stats"))
+        except ValueError as e:
+            raise ApiError(str(e))
+        return {"platform": pf, "post_id": pid, "task": request_ai(con, "bench", f"{pf}|{pid}")}
     if path == "/api/playbook/calibrate":
         try:
             playbook.apply_calibration(con, body.get("platform"))
@@ -461,7 +483,8 @@ def api_get(con, worker, path, query):
     if path == "/api/today":
         return guide.today_view(con)
     if path == "/api/playbook":
-        return {"lessons": playbook.lessons(con), "calibration": playbook.calibration(con), "field_names": playbook.FIELD_NAMES}
+        return {"lessons": playbook.lessons(con), "calibration": playbook.calibration(con), "field_names": playbook.FIELD_NAMES,
+                "insights": playbook.insights(con)}
     if path == "/api/agent":
         tasks = agent.pending(con)
         done = db.rows(con, "SELECT id, kind, note, done_at FROM agent_tasks WHERE status='done' ORDER BY done_at DESC LIMIT 5")
@@ -491,7 +514,7 @@ def api_get(con, worker, path, query):
         return {"comments": out, "rules": comments.list_rules(con), "questions": planner.top_questions(con, 30)[:10],
                 "auto_send_platforms": comments.AUTO_SEND_PLATFORMS}
     if path == "/api/reviews":
-        return {"reviews": db.rows(con, "SELECT * FROM reviews ORDER BY id DESC LIMIT 30")}
+        return {"reviews": db.rows(con, "SELECT * FROM reviews ORDER BY id DESC LIMIT 30"), "insights": playbook.insights(con)}
     m = re.fullmatch(r"/api/jobs/(\d+)", path)
     if m:
         found = db.rows(con, "SELECT * FROM jobs WHERE id=?", int(m.group(1)))

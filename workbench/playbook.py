@@ -130,14 +130,78 @@ def preferred(con, field, data=None):
 
 
 def brief_text(con):
-    """写进出稿说明的打法摘要。"""
+    """写进出稿说明的打法摘要：数据验证过的打法，加上复盘里记下、人工确认过的经验。"""
     items = [L for L in lessons(con) if L["status"] in ("有效", "无效")]
-    if not items:
-        return ""
-    lines = ["## 打法库（这个账号自己验证过的，优先用有效的、避开无效的）"]
-    for L in items[:12]:
-        lines.append(f"- 【{L['status']}】{L['title']}：{L['summary']}" + (f"。备注：{L['note']}" if L["note"] else ""))
-    return "\n".join(lines)
+    lines = []
+    if items:
+        lines.append("## 打法库（这个账号自己验证过的，优先用有效的、避开无效的）")
+        for L in items[:12]:
+            lines.append(f"- 【{L['status']}】{L['title']}：{L['summary']}" + (f"。备注：{L['note']}" if L["note"] else ""))
+    kept = insights(con, "kept")
+    if kept:
+        lines += ["", "## 记下的经验（来自复盘，人工确认过；还没有被数据反复验证，当作优先考虑的做法）"]
+        lines += [f"- {x['text']}" + (f"（依据：{x['basis']}）" if x["basis"] else "") for x in kept[:10]]
+    return "\n".join(lines).strip()
+
+
+# ---------- 复盘里的洞察：AI 提，人确认，确认后才进出稿说明 ----------
+INSIGHT_HEADING = "可记入打法库的洞察"
+INSIGHT_ASK = f"""
+
+## 输出的最后一节（固定格式，程序会读取）
+在复盘正文之后，加一节「## {INSIGHT_HEADING}」，最多 3 条，每条一行：`- 洞察｜依据`
+- 洞察是以后还能复用的做法（以后做什么、不做什么），一句话，30 字以内；不是复述这一周的数字。
+- 依据写清是哪几条作品、什么数据。样本少于 3 条的，洞察以「假设：」开头。
+- 已经在「记下的经验」里的不要重复。没有值得记的就写一行「- 无」。"""
+
+
+def insights(con, status=None):
+    return rows(con, "SELECT * FROM insights" + (" WHERE status=?" if status else "") + " ORDER BY id DESC", *([status] if status else []))
+
+
+def extract_insights(text):
+    """从复盘正文里取出最后那一节的洞察：[(洞察, 依据)]"""
+    import re
+    m = re.search(rf"(?ms)^#+\s*{INSIGHT_HEADING}\s*$(.*?)(?=^#+\s|\Z)", text or "")
+    out = []
+    for line in (m.group(1) if m else "").splitlines():
+        line = line.strip().lstrip("-*·0123456789.、 ").strip("`").strip()
+        if not line or line in ("无", "无。", "暂无"):
+            continue
+        parts = [p.strip() for p in re.split(r"[｜|]", line, maxsplit=1)]
+        if len(parts[0]) >= 4:
+            out.append((parts[0][:80], parts[1][:160] if len(parts) > 1 else ""))
+    return out[:3]
+
+
+def propose_insights(con, text, source):
+    """把复盘里的洞察存成「待确认」；和已有的重复的不再提。返回新提了几条。"""
+    have = {analytics.norm_title(x["text"]) for x in insights(con)}
+    n = 0
+    with con:
+        for insight, basis in extract_insights(text):
+            if analytics.norm_title(insight) in have:
+                continue
+            con.execute("INSERT INTO insights (text, basis, source, created_at) VALUES (?,?,?,?)", (insight, basis, source, now_ms()))
+            have.add(analytics.norm_title(insight))
+            n += 1
+    return n
+
+
+def add_insight(con, text, basis=""):
+    text = (text or "").strip()
+    if len(text) < 4:
+        raise ValueError("写一句完整的话")
+    with con:
+        return con.execute("INSERT INTO insights (text, basis, source, status, created_at, decided_at) VALUES (?,?,?,?,?,?)",
+                           (text[:80], (basis or "").strip()[:160], "manual", "kept", now_ms(), now_ms())).lastrowid
+
+
+def decide_insight(con, insight_id, status):
+    if status not in ("kept", "dropped", "proposed"):
+        raise ValueError("状态不对")
+    with con:
+        con.execute("UPDATE insights SET status=?, decided_at=? WHERE id=?", (status, now_ms(), int(insight_id)))
 
 
 # ---------- 阈值校准 ----------

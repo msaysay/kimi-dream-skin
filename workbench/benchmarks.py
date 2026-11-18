@@ -88,6 +88,40 @@ def refresh(con, bench_id=None, log=print):
     return ok, new
 
 
+# ---------- 手动粘贴：不在对标名单里的爆款，贴进来一样能拆 ----------
+MANUAL_UID = "manual"
+
+
+def paste(con, platform, text, url="", author="", stats=None):
+    """贴一条爆款的文案 / 逐字稿进来。挂在一个不会被刷新的「手动粘贴」账号下，之后的拆解、复刻和监控到的爆款走同一套流程。"""
+    if platform not in config.PLATFORMS:
+        raise ValueError("不认识的平台")
+    text = (text or "").strip()
+    if len(text) < 10:
+        raise ValueError("内容太短了：把标题、文案或口播逐字稿贴进来，至少十几个字")
+    first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    title = (f"{author.strip()}：" if (author or "").strip() else "") + first[:80]
+    bid = rows(con, "SELECT id FROM benchmarks WHERE platform=? AND uid=?", platform, MANUAL_UID)
+    with con:
+        if not bid:
+            con.execute("INSERT INTO benchmarks (platform, uid, name, enabled, added_at) VALUES (?,?,?,0,?)", (platform, MANUAL_UID, "手动粘贴", now_ms()))
+            bid = rows(con, "SELECT id FROM benchmarks WHERE platform=? AND uid=?", platform, MANUAL_UID)
+        pid = f"m{now_ms()}"
+        con.execute("""INSERT INTO bench_posts (platform, post_id, bench_id, title, url, post_time, kind, first_seen, text) VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (platform, pid, bid[0]["id"], title, (url or "").strip()[:500], now_ms(), "video", now_ms(), text[:8000]))
+        s = stats or {}
+        num = lambda k: int(s[k]) if str(s.get(k) or "").strip().isdigit() else None
+        con.execute("INSERT INTO bench_snaps VALUES (?,?,?,?,?,?,?,?)", (platform, pid, now_ms(), num("likes"), num("comments"), num("shares"), num("collects"), None))
+    return platform, pid
+
+
+def times(p):
+    """一句话说明这条爆款的依据：监控到的写倍数，手动粘贴的照实说。"""
+    if p.get("pasted"):
+        return "手动粘贴的爆款" + (f"，互动 {p['inter']:,}" if p.get("inter") else "")
+    return f"是该号中位数的 {p['ratio']:.1f} 倍" if p.get("ratio") else "对标作品"
+
+
 # ---------- 爆款 ----------
 def load(con, days=30):
     """所有对标作品（带最新互动、爆款系数、增长），以及每个账号的统计。"""
@@ -111,16 +145,19 @@ def load(con, days=30):
     for bid, b in benches.items():
         mine = [p for p in posts if p["bench_id"] == bid]
         base = [p["inter"] for p in mine if not p["is_top"] and p["inter"]]
-        b["median"] = statistics.median(base) if len(base) >= 5 else None
+        b["manual"] = b["uid"] == MANUAL_UID
+        b["median"] = statistics.median(base) if len(base) >= 5 and not b["manual"] else None
         b["post_count"] = len(mine)
         for p in mine:
+            p["pasted"] = b["manual"]
             p["ratio"] = p["inter"] / b["median"] if b["median"] else None
-            p["hit"] = bool(p["ratio"] and p["ratio"] >= ratio and not p["is_top"])
+            # 手动贴进来的本来就是你认定的爆款，不用再算倍数
+            p["hit"] = b["manual"] or bool(p["ratio"] and p["ratio"] >= ratio and not p["is_top"])
             p["bench_name"] = b["name"]
         b["hits"] = sum(p["hit"] for p in mine)
     since = now_ms() - days * DAY if days else 0
     hits = sorted([p for p in posts if p.get("hit") and (p["post_time"] or 0) >= since and p["status"] != "ignored"],
-                  key=lambda p: -(p["ratio"] or 0))
+                  key=lambda p: (not p["pasted"] or p["status"] != "new", -(p["ratio"] or 0), -(p["first_seen"] or 0)))
     return {"benchmarks": list(benches.values()), "hits": hits, "ratio": ratio, "structure": structure(hits),
             "posts_by_key": {(p["platform"], p["post_id"]): p for p in posts}}
 
@@ -171,6 +208,7 @@ def analyze_brief(con, platform, post_id, data=None):
         raise ValueError("没有这条对标作品")
     L = p["latest"]
     facts = {"平台": config.PLATFORMS[platform]["name"], "对标账号": p["bench_name"], "标题文案": p["title"][:600],
+             **({"正文或口播逐字稿": p["text"][:6000]} if p.get("text") else {}),
              "时长秒": p["duration_sec"], "点赞": L.get("likes"), "评论": L.get("comments"), "转发": L.get("shares"), "收藏": L.get("collects"),
              "互动是该账号中位数的倍数": round(p["ratio"], 1) if p.get("ratio") else None, "原作品链接": p["url"]}
     return "\n\n".join([ANALYZE_PROMPT, method.dictionary_text(), method.profile_text(method.load_profile()),
@@ -189,7 +227,8 @@ def to_content(con, platform, post_id):
     th = method.load_params()["thresholds"][platform]
     title = re.sub(r"#\S+", "", p["title"]).strip()[:24] or "对标爆款"
     basis = (f"对标 {config.PLATFORMS[platform]['name']}「{p['bench_name']}」爆款：互动 {p['inter']:,}，是该号中位数的 "
-             f"{p['ratio']:.1f} 倍" if p["ratio"] else f"对标 {config.PLATFORMS[platform]['name']}「{p['bench_name']}」作品")
+             f"{p['ratio']:.1f} 倍" if p["ratio"] else f"{config.PLATFORMS[platform]['name']}上手动粘贴的一条爆款" if p["pasted"]
+             else f"对标 {config.PLATFORMS[platform]['name']}「{p['bench_name']}」作品")
     basis += "。借结构不借选题：选题要先过定位三闸，换成自己能兑现的内容"
     cid = contents.save(con, dict(tags, title=f"【对标复刻】借「{title}」的结构做一条", priority="P1", basis=basis, source="benchmark",
                                   targets=[{"metric": "follow_rate", "value": th["follow_rate"][1], "slot": "D3"}],
@@ -216,7 +255,7 @@ def plan_candidates(con, days=30, limit=2):
         short = re.sub(r"#\S+", "", p["title"]).strip()[:18]
         out.append({"priority": "P1", "title": f"【对标复刻】借「{short}」的结构",
                     "tags": dict(p["tags"]), "bench": (p["platform"], p["post_id"]),
-                    "basis": f"对标「{p['bench_name']}」爆款，互动是该号中位数的 {p['ratio']:.1f} 倍", "change": "借对标验证过的结构，换成自己能兑现的选题",
+                    "basis": f"对标「{p['bench_name']}」爆款，{times(p)}", "change": "借对标验证过的结构，换成自己能兑现的选题",
                     "exp": {"field": "benchmark", "from": None, "to": p["tags"].get("archetype")},
                     "targets": [{"metric": "follow_rate", "value": th["follow_rate"][1], "slot": "D3"}],
                     "acceptance": "D3 关注率达到良好线即成立", "verdict_from": "对标爆款"})

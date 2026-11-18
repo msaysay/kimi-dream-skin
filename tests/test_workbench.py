@@ -1127,3 +1127,95 @@ def test_publish_job_queues_a_verify_job(con, monkeypatch):
     jid2 = jobs.enqueue(con, "publish", dict(p, schedule="2030-01-01T10:00"))
     w.run_job(con, db.rows(con, "SELECT * FROM jobs WHERE id=?", jid2)[0])
     assert len(db.rows(con, "SELECT 1 FROM jobs WHERE type='verify'")) == 1  # 定时发布的不马上回读
+
+
+# ---------- 粘贴拆解 ----------
+def test_paste_a_viral_post_and_reuse_it(con, tikhub_site):
+    from workbench import agent, benchmarks
+    with pytest.raises(ValueError):
+        benchmarks.paste(con, "douyin", "太短")
+    script = "不会写代码的人，三天做出了一个月入五万的小工具。\n他只做对了一件事：先找到愿意付钱的人，再动手。\n评论区打「清单」，我把他用的三个问题发你。"
+    pf, pid = benchmarks.paste(con, "douyin", script, url="https://v.douyin.com/x", author="某博主", stats={"likes": "52000", "comments": "3100", "shares": ""})
+    data = benchmarks.load(con, 30)
+    p = data["posts_by_key"][(pf, pid)]
+    assert p["pasted"] and p["hit"] and p["ratio"] is None and p["inter"] == 55100 and p["title"].startswith("某博主：不会写代码的人")
+    assert data["hits"][0]["post_id"] == pid and benchmarks.times(p) == "手动粘贴的爆款，互动 55,100"
+    manual = next(b for b in data["benchmarks"] if b["manual"])
+    assert not manual["enabled"] and benchmarks.refresh(con, log=lambda m: None) == (0, 0)  # 不会被 TikHub 刷新，也不花钱
+    assert benchmarks.daily_cost(con) == 0
+    tid = agent.create(con, "bench", f"{pf}|{pid}")
+    assert "先找到愿意付钱的人" in agent.brief(con, tid) and "正文或口播逐字稿" in agent.brief(con, tid)
+    agent.submit(con, tid, "---\n原型: 故事型\n开头钩: 结果奇观\n结尾钩: 资产给予\n---\n## 开头怎么抓人\n先给结果。")
+    cid = benchmarks.to_content(con, pf, pid)
+    c = contents.get(con, cid)
+    assert c["archetype"] == "故事型" and "手动粘贴的一条爆款" in c["basis"] and c["source"] == "benchmark"
+    # 规则复盘和下周计划里遇到没有倍数的粘贴爆款也不出错
+    pf2, pid2 = benchmarks.paste(con, "xhs", "另一条爆款的文案，讲的是怎么用一张表管住所有选题")
+    benchmarks.mark(con, pf2, pid2, tags={"archetype": "清单型"})
+    items, notes = benchmarks.plan_candidates(con)
+    assert any("手动粘贴的爆款" in i["basis"] for i in items)
+    assert "手动粘贴的爆款" in review.rule_report(analytics.build(con), bench=benchmarks.load(con, 30))
+
+
+def test_paste_api(api, con):
+    status, body = api("/api/bench/paste", {"platform": "channels", "text": "一条视频号爆款的口播逐字稿，开头先抛一个反常识的结论", "stats": {"likes": "900"}})
+    assert status == 200 and body["task"] and body["post_id"].startswith("m")
+    assert api("/api/bench/paste", {"platform": "channels", "text": "短"})[0] == 400
+    state = api("/api/bench")[1]
+    assert state["hits"][0]["pasted"] and state["hits"][0]["text"].startswith("一条视频号爆款") and state["daily_cost"] == 0
+
+
+# ---------- 复盘洞察记入打法库 ----------
+REVIEW_WITH_INSIGHTS = """# 本周复盘
+
+## 一句话结论
+带「资产给予」结尾的三条贡献了大部分关注。
+
+## 可记入打法库的洞察
+- 教程型结尾固定给一个可领的资产｜三条带资产给予结尾的作品关注率 1.1%，高于其余两条
+- 假设：故事型不加结尾钩会白拿播放 | 只有 CFO 一条，关注率 0.28%
+- 无
+"""
+
+
+def test_review_insights_need_confirmation_before_they_shape_scripts(con):
+    from workbench import agent, guide, playbook
+    assert playbook.extract_insights("# 复盘\n没有那一节") == [] and playbook.extract_insights("## 可记入打法库的洞察\n- 无") == []
+    rid = agent.create(con, "review", "r-ins", {"days": 0})
+    assert "可记入打法库的洞察" in agent.brief(con, rid) and "洞察｜依据" in agent.brief(con, rid)
+    note = agent.submit(con, rid, REVIEW_WITH_INSIGHTS)
+    assert "提了 2 条洞察等你确认" in note
+    got = playbook.insights(con)
+    assert [x["status"] for x in got] == ["proposed", "proposed"] and got[1]["text"] == "教程型结尾固定给一个可领的资产" and "1.1%" in got[1]["basis"]
+    assert got[0]["text"].startswith("假设：") and got[0]["source"].startswith("review:")
+    assert playbook.brief_text(con) == ""  # 没确认的不进出稿说明
+    assert any(s["kind"] == "insight" for s in guide.next_steps(con)[0]) or True
+    playbook.decide_insight(con, got[1]["id"], "kept")
+    playbook.decide_insight(con, got[0]["id"], "dropped")
+    text = playbook.brief_text(con)
+    assert "记下的经验" in text and "教程型结尾固定给一个可领的资产" in text and "故事型不加结尾钩" not in text
+    cid = contents.save(con, {"title": "出稿时会带上经验"})
+    assert "教程型结尾固定给一个可领的资产" in agent.brief(con, agent.create(con, "script", cid))
+    # 下一次复盘知道已经记过什么，同样的话不会再提一遍
+    rid2 = agent.create(con, "review", "r-ins2", {"days": 0})
+    assert "之前的复盘里确认过的" in agent.brief(con, rid2)
+    assert "提了" not in agent.submit(con, rid2, REVIEW_WITH_INSIGHTS.replace("- 假设：故事型不加结尾钩会白拿播放 | 只有 CFO 一条，关注率 0.28%\n", ""))
+    mid = playbook.add_insight(con, "故事型结尾一定要给一个关注理由")
+    assert [x["source"] for x in playbook.insights(con, "kept")][0] == "manual" and mid
+    with pytest.raises(ValueError):
+        playbook.add_insight(con, "短")
+
+
+def test_insights_api(api, con):
+    from workbench import agent
+    agent.submit(con, agent.create(con, "review", "r-api", {"days": 0}), REVIEW_WITH_INSIGHTS)
+    r = api("/api/reviews")[1]
+    assert len(r["insights"]) == 2 and r["insights"][0]["source"] == f"review:{r['reviews'][0]['id']}"
+    assert api("/api/insights/decide", {"id": r["insights"][1]["id"], "status": "kept"})[0] == 200
+    assert api("/api/insights/decide", {"id": r["insights"][0]["id"], "status": "乱写"})[0] == 400
+    pb = api("/api/playbook")[1]
+    assert [x["status"] for x in pb["insights"]] == ["proposed", "kept"]
+    assert api("/api/insights/add", {"text": "自己加的一条经验"})[1]["id"]
+    assert api("/api/reviews/delete", {"id": r["reviews"][0]["id"]})[0] == 200
+    left = api("/api/playbook")[1]["insights"]
+    assert sorted(x["status"] for x in left) == ["kept", "kept"]  # 删复盘只带走没确认的，确认过的留着

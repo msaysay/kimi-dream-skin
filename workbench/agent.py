@@ -73,8 +73,9 @@ def brief(con, task_id, direct=False):
         text = contents.script_brief(con, contents.get(con, int(t["ref"])))
     elif t["kind"] == "review":
         from . import review
+        from . import playbook
         text = ("# 任务：写一份周复盘\n\n" + review.ai_brief(review.gather(con, p.get("days") or None))
-                + "\n\n## 输出格式\n直接输出 Markdown 复盘全文。")
+                + "\n\n## 输出格式\n直接输出 Markdown 复盘全文。" + playbook.INSIGHT_ASK)
     elif t["kind"] == "bench":
         from . import benchmarks
         pf, pid = t["ref"].split("|", 1)
@@ -179,8 +180,10 @@ def submit(con, task_id, text):
         note = f"稿子已写进「{update.get('title') or c['title']}」" + (f"，进入「{update['stage']}」阶段" if update.get("stage") else "")
     elif t["kind"] == "review":
         from . import review
+        from . import playbook
         rid = review.save(con, p.get("days"), "ai", text)
-        note = f"复盘已保存（编号 {rid}）"
+        proposed = playbook.propose_insights(con, text, f"review:{rid}")
+        note = f"复盘已保存（编号 {rid}）" + (f"，提了 {proposed} 条洞察等你确认" if proposed else "")
     elif t["kind"] == "bench":
         from . import benchmarks
         meta, body = front_matter(text)

@@ -482,6 +482,12 @@ function playbookPage() {
       <td class="num-cell">${r.current.map((v) => fmtMetric(r.metric, v)).join(" / ")}</td><td class="num-cell">${r.suggested.map((v) => fmtMetric(r.metric, v)).join(" / ")}</td></tr>`).join("")}</tbody></table></div>`
     : `<p class="hint">${pfDot(c.platform)}${pfName(c.platform)}：现在 ${c.n} 条，攒到 ${c.need} 条后按你自己的分位数给建议。</p>`).join("");
   return `<div class="head"><h1>打法库</h1><span class="sub">每次验收都会更新：改了什么 → 有没有用。有效的会优先进计划和出稿，无效的会避开</span></div>
+    <div class="card"><h2>记下的经验 <span class="sub" style="font-weight:400">AI 复盘里提炼、你确认过的做法。还没有被数据反复验证，出稿时当作优先考虑的做法</span></h2>
+      ${(P.insights || []).filter((x) => x.status === "proposed").length ? `<div class="banner ai">有 ${(P.insights || []).filter((x) => x.status === "proposed").length} 条复盘洞察等你确认。<button class="small" data-act="go" data-page="review" style="margin-left:10px">去复盘页确认</button></div>` : ""}
+      ${(P.insights || []).filter((x) => x.status === "kept").map((x) => `<div class="insight"><div class="grow"><b>${esc(x.text)}</b>${x.basis ? `<div class="hint">依据：${esc(x.basis)}</div>` : ""}
+        <div class="hint">${x.source === "manual" ? "自己加的" : "来自 AI 复盘"} · ${dt(x.decided_at || x.created_at)}</div></div>
+        <button class="small danger" data-act="insight-del" data-id="${x.id}">删除</button></div>`).join("") || `<p class="hint" style="margin:0 0 8px">还没有。做一次 AI 复盘，它会在最后提 1–3 条值得记的做法。</p>`}
+      <div class="row" style="margin-top:10px"><div class="grow"><input id="ins-text" placeholder="自己加一条，例如：故事型结尾一定要给一个关注理由" maxlength="80"></div><button data-act="insight-add">记下</button></div></div>
     <div class="card"><h2>实验打法 <span class="sub" style="font-weight:400">计划里每条只改一个变量，验收结果累积在这里；做到 2 次以上才下结论</span></h2>
       ${exp.length ? exp.map(block).join("") : `<p class="hint" style="margin:0">还没有验收过的计划选题。按计划出稿、发布，数据回来后这里会出现第一条。</p>`}</div>
     <div class="card"><h2>结构打法 <span class="sub" style="font-weight:400">同一平台里某种结构至少 3 条作品后，关注率和平台中位数比</span></h2>
@@ -497,7 +503,7 @@ function benchPage() {
   const keySet = S.state.settings.tikhub_api_key_set;
   const head = `<div class="head"><h1>对标</h1><span class="sub">盯住同赛道的号，找出它们的爆款，拆成结构再拿来用</span><div class="grow"></div>
     <div class="seg">${[[7, "近 7 天"], [30, "近 30 天"], [90, "近 90 天"], [0, "全部"]].map(([v, t]) => `<button data-act="bench-days" data-v="${v}" class="${S.benchDays === v ? "on" : ""}">${t}</button>`).join("")}</div>
-    <button data-act="bench-refresh" ${keySet && B.benchmarks.length ? "" : "disabled"}>刷新全部</button></div>`;
+    <button data-act="bench-refresh" ${keySet && B.benchmarks.some((b) => !b.manual) ? "" : "disabled"}>刷新全部</button></div>`;
   const banner = keySet ? "" : `<div class="banner">还没有配置 TikHub：对标账号的数据要通过 TikHub 读取。<button class="small" data-act="go" data-page="settings" style="margin-left:10px">去填写 API Key</button></div>`;
   const cands = S.benchCands ? `<div class="cands"><div class="sub">选一个账号加入对标：</div>${S.benchCands.list.map((c, i) => `<div class="row cand">
       ${c.avatar ? `<img src="${esc(c.avatar)}" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<b>${esc(c.name)}</b><span class="sub grow">${c.followers ? num(c.followers) + " 粉丝 · " : ""}${esc((c.note || "").slice(0, 40))}</span>
@@ -507,9 +513,17 @@ function benchPage() {
       <div class="grow"><input id="bench-text" placeholder="抖音 / 小红书填主页链接；视频号填视频号 ID（sph 开头）、finder username 或账号名"></div>
       <input id="bench-grp" placeholder="分组（可选）" style="width:130px"><button class="primary" data-act="bench-resolve" ${keySet ? "" : "disabled"}>查找</button></div>
     <p class="hint" style="margin-bottom:0">每次读取都会在 TikHub 扣费：抖音约 $${B.prices.douyin}/次，小红书约 $${B.prices.xhs}/次，视频号 $${B.prices.channels}/次。按现在的账号，每天自动刷新约 $${B.daily_cost}；近 30 天共调用 ${B.usage.calls} 次，约 $${B.usage.cost}。</p>${cands}</div>`;
-  const accounts = B.benchmarks.length ? `<div class="card"><h2>对标账号 <span class="sub" style="font-weight:400">中位互动 = 最近作品（不含置顶）赞评转藏之和的中位数，爆款 = 达到它的 ${B.ratio} 倍</span></h2>
+  const paste = `<div class="card"><h2>粘贴一条爆款 <span class="sub" style="font-weight:400">不在对标名单里的也能拆：把标题、文案或口播逐字稿贴进来，不用 TikHub</span></h2>
+    <textarea id="paste-text" placeholder="把爆款的标题、文案或口播逐字稿粘到这里。逐字稿越完整，拆得越准" style="min-height:90px"></textarea>
+    <div class="row" style="margin-top:8px;flex-wrap:wrap"><select id="paste-pf" style="width:110px">${PF.map((p) => `<option value="${p}">${pfName(p)}</option>`).join("")}</select>
+      <input id="paste-author" placeholder="作者（可选）" style="width:140px"><div class="grow"><input id="paste-url" placeholder="原作品链接（可选）"></div>
+      ${[["likes", "赞"], ["comments", "评"], ["shares", "转"], ["collects", "藏"]].map(([k, n]) => `<input id="paste-${k}" placeholder="${n}" inputmode="numeric" style="width:70px">`).join("")}
+      <button class="primary" data-act="bench-paste">拆解这条</button></div>
+    <p class="hint" style="margin-bottom:0">AI 会给它打结构标签、写拆解，并给出 2 个符合你定位的借用选题。拆完出现在下面的「对标爆款」里，可以一键变成选题。互动数填了更好，不填也能拆。</p></div>`;
+  const shown = B.benchmarks.filter((b) => !b.manual);
+  const accounts = shown.length ? `<div class="card"><h2>对标账号 <span class="sub" style="font-weight:400">中位互动 = 最近作品（不含置顶）赞评转藏之和的中位数，爆款 = 达到它的 ${B.ratio} 倍</span></h2>
     <div class="table-wrap"><table><thead><tr><th>账号</th><th>粉丝</th><th>作品</th><th>中位互动</th><th>爆款</th><th>上次读取</th><th></th></tr></thead><tbody>
-    ${B.benchmarks.map((b) => `<tr><td>${pfDot(b.platform)}<b>${esc(b.name)}</b>${b.grp ? ` <span class="chip">${esc(b.grp)}</span>` : ""}${b.enabled ? "" : ` <span class="tag">已停用</span>`}
+    ${shown.map((b) => `<tr><td>${pfDot(b.platform)}<b>${esc(b.name)}</b>${b.grp ? ` <span class="chip">${esc(b.grp)}</span>` : ""}${b.enabled ? "" : ` <span class="tag">已停用</span>`}
         ${b.last_error ? `<div class="hint warn-text">${esc(b.last_error)}</div>` : ""}</td>
       <td class="num-cell">${num(b.followers)}</td><td class="num-cell">${b.post_count}</td><td class="num-cell">${b.median == null ? `<span class="hint">不到 5 条</span>` : num(b.median)}</td>
       <td class="num-cell">${b.hits}</td><td class="sub">${dt(b.last_fetch)}</td>
@@ -527,10 +541,10 @@ function benchPage() {
     ${B.hits.map((p, i) => `<tr class="click" data-act="bench-open" data-i="${i}"><td class="title-cell"><div class="t" title="${esc(p.title)}">${esc(cleanTitle(p.title))}</div>
         <div class="sub">${pfDot(p.platform)}${esc(p.bench_name)} · ${day(p.post_time)}${p.duration_sec ? " · " + sec(p.duration_sec) : ""}</div></td>
       <td class="num-cell">${num(p.inter)}<div class="hint">赞 ${num(p.latest.likes)} · 评 ${num(p.latest.comments)} · 转 ${num(p.latest.shares)} · 藏 ${num(p.latest.collects)}</div></td>
-      <td class="num-cell"><b>×${p.ratio.toFixed(1)}</b></td><td>${tagChips(p.tags) || `<span class="hint">未拆解</span>`}</td>
+      <td class="num-cell">${p.ratio ? `<b>×${p.ratio.toFixed(1)}</b>` : `<span class="tag">粘贴</span>`}</td><td>${tagChips(p.tags) || `<span class="hint">未拆解</span>`}</td>
       <td><span class="tag v-${STATUS_CLASS[p.status]}">${B.status_names[p.status]}</span></td></tr>`).join("")}</tbody></table></div>`
-      : `<p class="sub">${B.benchmarks.length ? "这段时间没有达到爆款倍数的作品。新加的账号要读到 5 条以上作品才算得出中位数。" : "先添加几个对标账号。"}</p>`}</div>`;
-  return head + banner + add + accounts + structCard + hits;
+      : `<p class="sub">${shown.length ? "这段时间没有达到爆款倍数的作品。新加的账号要读到 5 条以上作品才算得出中位数。" : "先添加几个对标账号。"}</p>`}</div>`;
+  return head + banner + paste + (B.hits.some((p) => p.pasted && p.status === "new") ? (S.state.agent_pending || []).filter((x) => x.kind === "bench").slice(0, 1).map(agentHint).join("") : "") + add + accounts + structCard + hits;
 }
 function benchDrawer(p) {
   const L = p.latest;
@@ -541,7 +555,7 @@ function benchDrawer(p) {
       <div class="scores"><div><div class="sub">互动</div><div class="big">${num(p.inter)}</div></div><div><div class="sub">爆款倍数</div><div class="big">×${p.ratio ? p.ratio.toFixed(1) : "—"}</div></div>
         <div><div class="sub">每天新增</div><div class="big">${p.growth_per_day == null ? "—" : num(p.growth_per_day)}</div></div><div><div class="sub">状态</div><div><span class="tag v-${STATUS_CLASS[p.status]}">${S.bench.status_names[p.status]}</span></div></div></div>
       <p class="hint">赞 ${num(L.likes)} · 评论 ${num(L.comments)} · 转发 ${num(L.shares)} · 收藏 ${num(L.collects)}${L.plays ? " · 播放 " + num(L.plays) : ""}</p>
-      <p style="white-space:pre-wrap;margin:0">${esc(p.title)}</p></div></div></div>
+      <p style="white-space:pre-wrap;margin:0;max-height:260px;overflow:auto">${esc(p.text || p.title)}</p></div></div></div>
     <div class="card"><h2>拆解：给它打和自己作品同一套标签</h2><div class="grid k3" style="margin:0">${["motif", "archetype", "hook_open", "hook_mid", "hook_end", "duration_bin"].map((f) => tagSelect(f, p.tags[f], "data-btag")).join("")}</div>
       ${p.tags.archetype ? comboHint(p.tags) : ""}
       <label class="field"><span>拆解笔记（开头怎么抓人、结构怎么推进、结尾留了什么动作、为什么能爆、我们怎么借）</span><textarea id="bench-analysis" style="min-height:180px">${esc(p.analysis || "")}</textarea></label>
@@ -553,6 +567,15 @@ function benchDrawer(p) {
 }
 
 // ---------- 复盘 ----------
+const INSIGHT_STATE = { kept: ["已记入打法库", "v-good"], dropped: ["不记", ""], proposed: ["等你确认", "v-info"] };
+function insightRows(list) {
+  if (!list.length) return "";
+  return `<div class="insights"><div class="sub" style="margin-bottom:6px">这份复盘里提炼出来的做法。你确认的才会记进打法库，之后出稿和复盘会参考：</div>
+    ${list.map((x) => `<div class="insight"><span class="tag ${INSIGHT_STATE[x.status][1]}">${INSIGHT_STATE[x.status][0]}</span>
+      <div class="grow"><b>${esc(x.text)}</b>${x.basis ? `<div class="hint">依据：${esc(x.basis)}</div>` : ""}</div>
+      ${x.status === "proposed" ? `<button class="small primary" data-act="insight" data-id="${x.id}" data-v="kept">记入打法库</button><button class="small" data-act="insight" data-id="${x.id}" data-v="dropped">不记</button>`
+        : `<button class="small" data-act="insight" data-id="${x.id}" data-v="proposed">撤销</button>`}</div>`).join("")}</div>`;
+}
 function reviewPage() {
   const running = S.state.jobs.some((j) => j.type === "review" && (j.status === "pending" || j.status === "running"));
   return `<div class="head"><h1>复盘</h1><div class="grow"></div>
@@ -562,7 +585,7 @@ function reviewPage() {
   <div class="card"><p style="margin:0">按方法论的顺序：定位检查 → 数据校验 → 五段漏斗（找本周唯一要改的那一段）→ 单条判定 → 四个判断 → 结构矩阵 → 上期计划验收 → 评论区信号 → 下一步计划。
     复盘里的下一步只是预览，去「计划」页生成后才会进入创作流程。</p></div>
   ${running ? `<div class="card sub">正在生成复盘…</div>` : ""}
-  ${S.reviews.map((r) => `<div class="card"><div class="row" style="margin-bottom:10px"><span class="tag">${r.kind === "ai" ? "AI 复盘" : "规则复盘"}</span><span class="sub">${dt(r.created_at)} 生成</span><span class="grow"></span><button class="small danger" data-act="review-del" data-id="${r.id}">删除</button></div><div class="md">${md(r.content)}</div></div>`).join("")
+  ${S.reviews.map((r) => `<div class="card"><div class="row" style="margin-bottom:10px"><span class="tag">${r.kind === "ai" ? "AI 复盘" : "规则复盘"}</span><span class="sub">${dt(r.created_at)} 生成</span><span class="grow"></span><button class="small danger" data-act="review-del" data-id="${r.id}">删除</button></div>${insightRows((S.insights || []).filter((x) => x.source === "review:" + r.id))}<div class="md">${md(r.content)}</div></div>`).join("")
     || (running ? "" : `<div class="card empty"><p>还没有复盘。选一个时间范围，点右上角生成。</p></div>`)}`;
 }
 
@@ -838,7 +861,7 @@ function render() {
 async function go(page) {
   S.page = page;
   if (["dashboard", "comments", "create"].includes(page) || !S.data) await loadData();
-  if (page === "review") S.reviews = (await api("/api/reviews")).reviews;
+  if (page === "review") { const r = await api("/api/reviews"); S.reviews = r.reviews; S.insights = r.insights; }
   if (["plan", "create", "publish"].includes(page)) S.contents = (await api("/api/contents")).contents;
   if (page === "comments") S.comments = await api("/api/comments");
   if (page === "bench") S.bench = await api(`/api/bench?days=${S.benchDays}`);
@@ -1004,6 +1027,14 @@ const ACTIONS = {
   "cal-go": async (el) => { S.calMonth = el.dataset.m; await go("calendar"); },
   "cal-event-add": async () => { await api("/api/calendar/event", { date: $("#ev-date").value, title: $("#ev-title").value }); toast("已添加"); await go("calendar"); },
   "cal-event-del": async (el, e) => { e.stopPropagation(); await api("/api/calendar/event/delete", { id: +el.dataset.id }); await go("calendar"); },
+  insight: async (el) => { await api("/api/insights/decide", { id: +el.dataset.id, status: el.dataset.v }); toast(el.dataset.v === "kept" ? "已记入打法库，之后出稿会参考" : "好的"); await go(S.page); },
+  "insight-del": async (el) => { await api("/api/insights/delete", { id: +el.dataset.id }); await go("playbook"); },
+  "insight-add": async () => { await api("/api/insights/add", { text: $("#ins-text").value }); toast("已记下"); await go("playbook"); },
+  "bench-paste": async () => {
+    const stats = {}; ["likes", "comments", "shares", "collects"].forEach((k) => { stats[k] = $("#paste-" + k).value; });
+    await api("/api/bench/paste", { platform: $("#paste-pf").value, text: $("#paste-text").value, url: $("#paste-url").value, author: $("#paste-author").value, stats });
+    toast("已收下，" + handedTo()); S.benchDays = S.benchDays || 30; await refresh(); await go("bench");
+  },
   "agent-run": async (el) => { await api("/api/agent/run", { ids: [+el.dataset.id] }); toast(handedTo()); await refresh(); await go(S.page); },
   "agent-run-all": async () => { await api("/api/agent/run", {}); toast(handedTo()); await refresh(); await go("agent"); },
   "ai-test": async () => {
