@@ -10,6 +10,11 @@ import urllib.request
 from . import analytics, config, method
 
 
+def predict_accuracy(con, data, days):
+    from . import predict
+    return predict.accuracy(con, analytics.build(con) if days else data, days)
+
+
 def bench_times(p):
     from .benchmarks import times
     return times(p)
@@ -64,7 +69,7 @@ def clean(title, n=24):
     return t[:n] + ("…" if len(t) > n else "")
 
 
-def summarize(data, plan=(), accepted=(), questions=(), bench=None):
+def summarize(data, plan=(), accepted=(), questions=(), bench=None, predictions=None):
     """压缩成复盘摘要（也是发给大模型的内容）。"""
     names = data["platforms"]
     posts = []
@@ -81,10 +86,11 @@ def summarize(data, plan=(), accepted=(), questions=(), bench=None):
                                 "times_account_median": round(p["ratio"], 1) if p.get("ratio") else None, "pasted": bool(p.get("pasted")), "tags": p["tags"]} for p in (bench or {}).get("hits", [])[:8]],
             "platform_summary": {names[k]: v for k, v in data["summary"].items()}, "posts": posts,
             "matrix": data["matrix"], "last_plan_acceptance": list(accepted), "comment_questions": list(questions)[:10],
-            "plan_candidates": [{k: c[k] for k in ("priority", "title", "tags", "change", "acceptance")} for c in plan]}
+            "plan_candidates": [{k: c[k] for k in ("priority", "title", "tags", "change", "acceptance")} for c in plan],
+            **({"prediction_accuracy": predictions} if predictions and predictions.get("sources") else {})}
 
 
-def rule_report(data, plan=(), notes=(), accepted=(), questions=(), bench=None, lessons=()):
+def rule_report(data, plan=(), notes=(), accepted=(), questions=(), bench=None, lessons=(), predictions=None):
     """不依赖大模型的规则版复盘。"""
     names = data["platforms"]
     days = data["days"]
@@ -194,6 +200,9 @@ def rule_report(data, plan=(), notes=(), accepted=(), questions=(), bench=None, 
     if settled:
         L += ["", "## 7c 打法库（越用越准：验证过的打法会影响下周计划和出稿）", ""]
         L += [f"- 【{x['status']}】{x['title']}：{x['summary']}" for x in settled[:8]]
+    if predictions is not None:
+        from . import predict
+        L += ["", "## 7d 预测准确度（发布前猜的，和实际数据对答案）", ""] + predict.report_lines(predictions, names)
     L += ["", "## 8 下一步创作计划", ""]
     for c in plan:
         t = c["tags"]
@@ -230,12 +239,13 @@ def gather(con, days):
     plan, notes = planner.candidates(data, questions, prefs)
     bench_items, bench_notes = benchmarks.plan_candidates(con, days or 30)
     return {"data": data, "plan": plan + bench_items, "notes": notes + bench_notes, "accepted": last_acceptance(con),
-            "questions": questions, "bench": benchmarks.load(con, days or 30), "lessons": playbook.lessons(con), "insights": playbook.insights(con, "kept")}
+            "questions": questions, "bench": benchmarks.load(con, days or 30), "lessons": playbook.lessons(con), "insights": playbook.insights(con, "kept"),
+            "predictions": predict_accuracy(con, data, days)}
 
 
 def ai_brief(g):
     """交给 AI 写复盘时的完整说明（规则、字典、定位卡、数据摘要）。"""
-    summary = summarize(g["data"], g["plan"], g["accepted"], g["questions"], g["bench"])
+    summary = summarize(g["data"], g["plan"], g["accepted"], g["questions"], g["bench"], g.get("predictions"))
     kept = g.get("insights") or []
     known = ("记下的经验（之前的复盘里确认过的，这次看看数据是否还支持）：\n" + "\n".join(f"- {x['text']}" for x in kept[:10])) if kept else ""
     return "\n\n".join([SYSTEM_PROMPT, method.dictionary_text(), method.profile_text(method.load_profile()), *([known] if known else []),
@@ -254,4 +264,4 @@ def create(con, days, use_ai=False):
     g = gather(con, days)
     if use_ai:
         return save(con, days, "ai", chat([{"role": "user", "content": ai_brief(g)}]))
-    return save(con, days, "rule", rule_report(g["data"], g["plan"], g["notes"], g["accepted"], g["questions"], g["bench"], g["lessons"]))
+    return save(con, days, "rule", rule_report(g["data"], g["plan"], g["notes"], g["accepted"], g["questions"], g["bench"], g["lessons"], g["predictions"]))

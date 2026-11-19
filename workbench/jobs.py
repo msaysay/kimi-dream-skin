@@ -190,6 +190,12 @@ class Worker(threading.Thread):
                     self.log(con, job_id, f"✗ 待办 #{task_id} 没处理成：{e}")
                 finally:
                     self.proc = None
+            # 出稿之后会多出一条「预测数据」的待办，接着处理
+            follow = [t["id"] for t in db.rows(con, "SELECT id FROM agent_tasks WHERE kind='predict' AND status='pending'") if t["id"] not in p["tasks"]]
+            busy = {i for j in db.rows(con, "SELECT params FROM jobs WHERE type='agent_auto' AND status='pending'") for i in json.loads(j["params"]).get("tasks", [])}
+            follow = [i for i in follow if i not in busy]
+            if follow and not p.get("follow") and agent.auto_name():
+                enqueue(con, "agent_auto", {"tasks": follow, "follow": True})
             return ok
         if kind in ("comments", "comment_send"):
             action = "comments" if kind == "comments" else "send-comments"

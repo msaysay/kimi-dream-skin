@@ -35,6 +35,7 @@ DEFAULT_SETTINGS = {
     "hot_auto": True,        # 工作台开着时每天刷新一次热榜
     "verify_publish": True,  # 发布后回读作品列表，确认真的发出去了
     "cadence_days": 4,       # 一个平台超过几天没发就提醒
+    "xhs_manual": True,      # 小红书不自动提交：工作台备好素材和文案，你自己发（自动提交容易被判违规）
     "xhs_cover_ratio": "3:4",  # 小红书封面比例：3:4 / 1:1 / 4:3 / 9:16
     # 对标账号（TikHub）
     "tikhub_api_key": "",

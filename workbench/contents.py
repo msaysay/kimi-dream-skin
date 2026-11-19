@@ -138,7 +138,9 @@ def get(con, content_id):
     found = rows(con, "SELECT * FROM contents WHERE id=?", content_id)
     if not found:
         raise ValueError("没有这条内容")
-    return decode(found[0])
+    c = decode(found[0])
+    c["posts"] = rows(con, "SELECT cp.content_id, cp.platform, cp.post_id, p.title, p.account FROM content_posts cp LEFT JOIN posts p USING (platform, post_id) WHERE cp.content_id=?", content_id)
+    return c
 
 
 def decode(c):

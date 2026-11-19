@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import agent, analytics, runner, cal, hot, precheck, benchmarks, comments, config, covers, contents, db, demo, guide, importer, jobs, method, planner, playbook, tikhub
+from . import agent, analytics, runner, cal, hot, precheck, manual, predict, benchmarks, comments, config, covers, contents, db, demo, guide, importer, jobs, method, planner, playbook, tikhub
 
 ACCOUNT_RE = re.compile(r"^[\w一-鿿-]{1,30}$")
 
@@ -51,7 +51,7 @@ def state(con, worker):
             "has_data": con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] > 0,
             "agent_pending": [{"id": t["id"], "kind": t["kind"], "ref": t["ref"], "running": t["id"] in running}
                               for t in db.rows(con, "SELECT id, kind, ref FROM agent_tasks WHERE status='pending'")],
-            "agent_api": bool(agent.auto_name()), "agent_auto": agent.auto_name(),
+            "agent_api": bool(agent.auto_name()), "agent_auto": agent.auto_name(), "manual_todo": manual.todo(con),
             "hot_fit": con.execute("SELECT COUNT(*) FROM hot_topics WHERE fit='高' AND state='new' AND content_id IS NULL AND fetched_at>=?",
                                    (jobs.now_ms() - 2 * 86400000,)).fetchone()[0]}
 
@@ -150,9 +150,45 @@ def api_post(con, worker, path, body):
                 raise ApiError(f"{config.PLATFORMS[t['platform']]['name']}：{e}")
             queued.append(p)
         if body.get("content_id"):
+            cid = int(body["content_id"])
+            try:  # 发布前把预测定下来：基线现在就记，读稿子的预测交给 AI
+                if predict.ensure_baseline(con, cid) and not predict.load(con, cid).get("ai") and (contents.get(con, cid).get("script") or "").strip():
+                    request_ai(con, "predict", cid)
+            except Exception:
+                pass
             with con:
-                con.execute("UPDATE contents SET stage='发布', updated_at=? WHERE id=?", (jobs.now_ms(), int(body["content_id"])))
-        return {"jobs": [jobs.enqueue(con, "publish", p) for p in queued]}
+                con.execute("UPDATE contents SET stage='发布', updated_at=? WHERE id=?", (jobs.now_ms(), cid))
+        by_hand = [p for p in queued if manual.is_manual(p["platform"])]
+        return {"jobs": [jobs.enqueue(con, "publish", p) for p in queued if not manual.is_manual(p["platform"])],
+                "manual": [manual.create(con, p) for p in by_hand]}
+    if path == "/api/manual/finish":
+        try:
+            check = manual.finish(con, body["id"], body.get("status") or "done")
+        except ValueError as e:
+            raise ApiError(str(e))
+        if check and config.load_settings()["verify_publish"]:
+            jobs.enqueue(con, "verify", check)
+        return {"ok": True}
+    if path == "/api/manual/open":
+        try:
+            return {"folder": manual.open_folder(con, body["id"], body.get("which") or "video")}
+        except (ValueError, OSError) as e:
+            raise ApiError(str(e))
+    if path == "/api/predict/request":
+        cid = int(body["id"])
+        try:
+            if predict.published(con, cid):
+                raise ValueError("这条已经发出去了，预测要在发布之前做")
+            predict.brief(con, cid)  # 先确认能预测（有稿子、有历史数据），并把基线记下
+        except ValueError as e:
+            raise ApiError(str(e))
+        return {"task": request_ai(con, "predict", cid)}
+    if path == "/api/predict/guess":
+        try:
+            predict.ensure_baseline(con, int(body["id"]))
+            return {"guess": predict.set_guess(con, int(body["id"]), body.get("guess"))}
+        except ValueError as e:
+            raise ApiError(str(e))
     if path == "/api/publish/check":
         return {"issues": precheck.check(con, body)}
     # ---- 热点雷达 ----
@@ -492,6 +528,14 @@ def api_get(con, worker, path, query):
         for t in tasks:
             t["running"] = t["id"] in running
         return {"pending": tasks, "recent": done, "auto": agent.auto_name(), "kinds": agent.KINDS}
+    m = re.fullmatch(r"/api/predict/(\d+)", path)
+    if m:
+        try:
+            return predict.view(con, contents.with_acceptance(con, [contents.get(con, int(m.group(1)))])[0])
+        except (ValueError, IndexError):
+            raise ApiError("没有这条内容", 404)
+    if path == "/api/predict":
+        return predict.accuracy(con)
     if path == "/api/hot":
         return hot.view(con)
     if path == "/api/calendar":

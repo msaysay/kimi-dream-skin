@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS publish_checks (job_id INTEGER PRIMARY KEY, platform 
 -- 复盘里提炼出来、人工确认过的经验（和按数据自动算出来的打法分开放）
 CREATE TABLE IF NOT EXISTS insights (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, basis TEXT DEFAULT '', source TEXT,
   status TEXT DEFAULT 'proposed', created_at INTEGER, decided_at INTEGER);
+-- 数据预测：发布前做的预测（baseline 基线 / ai 读稿子 / me 直觉），数据回来后对答案
+CREATE TABLE IF NOT EXISTS predictions (id INTEGER PRIMARY KEY AUTOINCREMENT, content_id INTEGER, source TEXT, made_at INTEGER, data TEXT,
+  UNIQUE (content_id, source));
+-- 需要自己动手发的内容（小红书不自动提交）：工作台备好素材和文案，发完回来点一下
+CREATE TABLE IF NOT EXISTS manual_posts (id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT, account TEXT, content_id INTEGER, kind TEXT,
+  title TEXT, body TEXT, tags TEXT, files TEXT, cover TEXT, schedule TEXT, status TEXT DEFAULT 'todo', created_at INTEGER, done_at INTEGER);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS comment_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, platforms TEXT,
   keywords TEXT, exclude TEXT DEFAULT '', templates TEXT DEFAULT '[]', use_ai INTEGER DEFAULT 0,

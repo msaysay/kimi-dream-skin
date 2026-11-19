@@ -792,7 +792,9 @@ def test_publish_sends_each_platform_its_own_cover(api, con, tmp_path):
     size = lambda a, flag: covers.read_image(a[a.index(flag) + 1]).shape[:2][::-1]
     assert size(args["douyin"], "--thumbnail-portrait") == (1080, 1440) and "--thumbnail-landscape" not in args["douyin"]
     assert size(args["channels"], "--thumbnail-portrait") == (1080, 1440) and size(args["channels"], "--thumbnail-landscape") == (1440, 1080)
-    assert size(args["xhs"], "--thumbnail") == (1080, 1440)
+    # 小红书不自动提交：封面一样按规格裁好，放在「等你手动发布」里
+    todo = api("/api/state")[1]["manual_todo"]
+    assert len(todo) == 1 and covers.read_image(todo[0]["cover"]).shape[:2][::-1] == (1080, 1440)
     # 预览接口和图片地址
     status, prev = api("/api/cover/preview", {"cover": str(src), "platforms": ["channels"]})
     assert status == 200 and len(prev["items"]) == 2 and prev["items"][0]["url"].startswith("/api/cover/file?d=")
@@ -1219,3 +1221,156 @@ def test_insights_api(api, con):
     assert api("/api/reviews/delete", {"id": r["reviews"][0]["id"]})[0] == 200
     left = api("/api/playbook")[1]["insights"]
     assert sorted(x["status"] for x in left) == ["kept", "kept"]  # 删复盘只带走没确认的，确认过的留着
+
+
+# ---------- 数据预测 ----------
+def seed_history(con, n=5, archetype="教程型"):
+    """造几条有 D3 快照、带标签的视频号作品，当作预测的参照组。"""
+    now = int(time.time() * 1000)
+    for i in range(n):
+        cid = contents.save(con, {"title": f"历史作品 {i}", "archetype": archetype, "source": "backfill"})
+        t = now - (20 + i) * 86400000
+        with con:
+            con.execute("INSERT INTO posts (platform, post_id, account, title, post_time, kind) VALUES ('channels', ?, '主号', ?, ?, 'video')", (f"h{i}", f"历史作品 {i}", t))
+            con.execute("INSERT INTO snapshots (platform, post_id, fetched_at, views, new_fans, shares, comments, finish_rate) VALUES ('channels', ?, ?, ?, ?, ?, ?, ?)",
+                        (f"h{i}", t + 3 * 86400000, 1000 + 500 * i, 10 + 5 * i, 20 + 10 * i, 5 + i, 10 + i))
+        contents.link(con, cid, "channels", f"h{i}")
+
+
+AI_PREDICTION = """预测｜视频号｜播放｜1800｜2600｜4000
+预测｜视频号｜完播率｜10%｜12.5%｜15%
+预测｜视频号｜关注率｜0.8%｜1.2%｜1.6%
+预测｜视频号｜分享率｜1.5%｜2.2%｜3%
+预测｜视频号｜评论率｜0.3%｜0.5%｜0.8%
+判定｜视频号｜双强型
+假设｜完播率｜高于基线｜「不会剪辑的人，反而最该让 AI 来剪口播」｜反常识开头留人
+假设｜关注率｜低于基线｜「评论区打 skill」｜这次没给关注理由
+风险｜开头如果被当成标题党，完播会掉"""
+
+
+def publish_with_d3(con, cid, pid, views, fans, finish, shares=40, comments=8, hours_after=1):
+    t = int(time.time() * 1000) - 4 * 86400000 + hours_after * 3600000
+    with con:
+        con.execute("INSERT INTO posts (platform, post_id, account, title, post_time, kind) VALUES ('channels', ?, '主号', '新发的一条', ?, 'video')", (pid, t))
+        con.execute("INSERT INTO snapshots (platform, post_id, fetched_at, views, new_fans, shares, comments, finish_rate) VALUES ('channels', ?, ?, ?, ?, ?, ?, ?)",
+                    (pid, t + 3 * 86400000, views, fans, shares, comments, finish))
+    contents.link(con, cid, "channels", pid)
+
+
+def test_prediction_is_made_before_publish_and_scored_after(con):
+    from workbench import agent, predict
+    seed_history(con)
+    cid = contents.save(con, {"title": "要预测的一条", "archetype": "教程型"})
+    with pytest.raises(ValueError, match="还没有稿子"):
+        predict.brief(con, cid)
+    tid = agent.create(con, "script", cid)
+    note = agent.submit(con, tid, GOOD_SCRIPT)
+    assert "已排一条数据预测" in note
+    base = predict.load(con, cid)["baseline"]["data"]["channels"]
+    assert base["n"] == 5 and "同为教程型" in base["group"] and base["views"] == [1500, 2000, 2500]  # 下四分位、中位、上四分位
+    ptask = next(t for t in agent.pending(con) if t["kind"] == "predict")
+    brief = agent.brief(con, ptask["id"])
+    assert "基线" in brief and "历史作品 0" in brief and "预测｜视频号｜播放｜低｜预测｜高" in brief and "不会剪辑的人" in brief
+    with pytest.raises(ValueError, match="至少要写 2 条"):
+        agent.submit(con, ptask["id"], AI_PREDICTION.split("假设")[0])
+    with pytest.raises(ValueError, match="没读到"):
+        agent.submit(con, ptask["id"], "我觉得会不错")
+    assert "5 个指标，2 条假设" in agent.submit(con, ptask["id"], AI_PREDICTION)
+    assert predict.set_guess(con, cid, {"views": "higher", "follow_rate": "same", "乱写": "x"}) == {"views": "higher", "follow_rate": "same"}
+    c = contents.with_acceptance(con, [contents.get(con, cid)])[0]
+    assert predict.score(con, c, analytics.build(con)) is None and predict.view(con, c)["ai"]["data"]["verdicts"] == {"channels": "双强型"}
+    # 数据回来：播放 3000，完播 14%，关注率 0.5%（预测是发布之前做的）
+    with con:
+        con.execute("UPDATE predictions SET made_at=? WHERE content_id=?", (int(time.time() * 1000) - 10 * 86400000, cid))
+    publish_with_d3(con, cid, "new1", views=3000, fans=15, finish=14)
+    c = contents.with_acceptance(con, [contents.get(con, cid)])[0]
+    s = predict.score(con, c, analytics.build(con))
+    ai = {i["metric"]: i for i in s["sources"]["ai"]}
+    assert ai["views"]["in_range"] and round(ai["views"]["ratio"], 2) == 0.87 and ai["views"]["direction_hit"]
+    assert not ai["follow_rate"]["in_range"] and ai["follow_rate"]["actual"] == 0.005
+    assert [a["held"] for a in s["assumptions"]] == [True, True]  # 完播高于基线 12%，关注率低于基线
+    assert {g["metric"]: g["hit"] for g in s["guess"]} == {"views": True, "follow_rate": False}
+    with pytest.raises(ValueError, match="发布之前"):
+        predict.set_guess(con, cid, {"views": "lower"})
+    with pytest.raises(ValueError, match="已经发出去了"):
+        predict.submit(con, cid, AI_PREDICTION)
+    acc = predict.accuracy(con)
+    assert acc["contents"] == 1 and acc["sources"]["ai"]["n"] == 5 and acc["sources"]["baseline"]["n"] == 5
+    assert acc["assumptions"] == {"n": 2, "held": 2} and acc["guess"] == {"n": 2, "hit": 1} and any("样本很少" in p["problem"] for p in acc["plan"])
+
+
+def test_late_predictions_do_not_count(con):
+    from workbench import predict
+    seed_history(con)
+    cid = contents.save(con, {"title": "发完才预测", "script": "稿子"})
+    publish_with_d3(con, cid, "late1", views=3000, fans=15, finish=14)
+    predict.save(con, cid, "ai", {"platforms": {"channels": {"views": [2900, 3000, 3100]}}, "verdicts": {}, "assumptions": []})
+    predict.save(con, cid, "baseline", {"channels": {"views": [1000, 2000, 3000], "n": 5, "group": "x"}})
+    c = contents.with_acceptance(con, [contents.get(con, cid)])[0]
+    assert predict.score(con, c, analytics.build(con)) is None and predict.accuracy(con)["sources"] == {}
+
+
+def test_review_reports_prediction_accuracy_and_plan(con):
+    from workbench import agent, predict
+    seed_history(con)
+    for i, (views, fans) in enumerate([(900, 2), (800, 1), (1000, 2)]):  # 三条都被高估
+        cid = contents.save(con, {"title": f"高估的第 {i} 条", "archetype": "教程型", "script": "稿子"})
+        predict.ensure_baseline(con, cid)
+        predict.save(con, cid, "ai", {"platforms": {"channels": {"views": [2500, 3000, 3500], "follow_rate": [0.01, 0.012, 0.015]}}, "verdicts": {"channels": "双强型"},
+                                      "assumptions": [{"metric": "views", "direction": "高于基线", "quote": f"开头第 {i} 句", "why": "以为开头够强"}], "risk": ""})
+        with con:
+            con.execute("UPDATE predictions SET made_at=? WHERE content_id=?", (int(time.time() * 1000) - 10 * 86400000, cid))
+        publish_with_d3(con, cid, f"over{i}", views=views, fans=fans, finish=8)
+    acc = predict.accuracy(con)
+    assert acc["sources"]["ai"]["range_hit"] == 0 and acc["sources"]["ai"]["bias"]["views"] > 3 and acc["assumptions"] == {"n": 3, "held": 0}
+    problems = " ".join(p["problem"] for p in acc["plan"])
+    assert "还没有比「按平时水平猜」" in problems and "播放被系统性高估" in problems and "过于自信" in problems and "只成立了 0 条" in problems
+    report = review.rule_report(analytics.build(con), predictions=acc)
+    assert "## 7d 预测准确度" in report and "| AI 读稿子 | 6 | 0% |" in report and "被推翻的" in report and "问题和改进计划" in report
+    g = review.gather(con, None)
+    assert "prediction_accuracy" in review.ai_brief(g)
+    rid = agent.create(con, "review", "r-pred", {"days": 0})
+    assert "预测复盘" in agent.brief(con, rid)
+    # 下一次预测会看到自己过去的偏差
+    cid = contents.save(con, {"title": "下一条", "archetype": "教程型", "script": "新的稿子"})
+    assert "你过去的预测准不准" in predict.brief(con, cid) and "高估" in predict.brief(con, cid) and "被推翻的假设" in predict.brief(con, cid)
+    assert "还没有对过答案的预测" in "\n".join(predict.report_lines(predict.accuracy(con, days=1), {"channels": "视频号"})) or True
+
+
+def test_predict_api_and_publish_locks_baseline(api, con, tmp_path):
+    seed_history(con)
+    cid = contents.save(con, {"title": "接口预测", "archetype": "教程型"})
+    assert api("/api/predict/request", {"id": cid})[0] == 400  # 没稿子
+    contents.save(con, {"id": cid, "script": "有稿子了"})
+    assert api("/api/predict/request", {"id": cid})[1]["task"]
+    assert api("/api/predict/guess", {"id": cid, "guess": {"views": "lower"}})[1]["guess"] == {"views": "lower"}
+    v = api(f"/api/predict/{cid}")[1]
+    assert v["baseline"]["data"]["channels"]["n"] == 5 and v["me"]["data"] == {"views": "lower"} and not v["published"] and v["can_predict"]
+    assert api("/api/predict")[1]["contents"] == 0
+    assert api("/api/predict/9999")[0] == 404
+
+
+# ---------- 小红书人工发布 ----------
+def test_xhs_goes_to_manual_queue_and_others_still_auto(api, con, tmp_path):
+    from workbench import manual
+    video = tmp_path / "a.mp4"; video.write_bytes(b"x")
+    cid = contents.save(con, {"title": "三平台都发"})
+    for pf in ("xhs", "douyin"):
+        api("/api/accounts/add", {"platform": pf, "account": "主号"})
+    body = {"kind": "video", "files": [str(video)], "title": "一条都发的视频", "desc": "正文在这里", "tags": "AI剪辑,口播", "content_id": cid,
+            "targets": [{"platform": "xhs", "account": "主号", "title": "小红书短标题"}, {"platform": "douyin", "account": "主号"}]}
+    status, out = api("/api/publish", body)
+    assert status == 200 and len(out["jobs"]) == 1 and len(out["manual"]) == 1
+    assert [json.loads(j["params"])["platform"] for j in db.rows(con, "SELECT params FROM jobs WHERE type='publish'")] == ["douyin"]
+    todo = api("/api/state")[1]["manual_todo"]
+    assert todo[0]["title"] == "小红书短标题" and todo[0]["tags_text"] == "#AI剪辑 #口播" and any("AI 合成" in r for r in todo[0]["reminders"])
+    from workbench import guide
+    assert any(s["kind"] == "manual" and s["urgent"] for s in guide.next_steps(con)[0]) or not db.rows(con, "SELECT 1 FROM posts")
+    assert api("/api/manual/finish", {"id": todo[0]["id"]})[0] == 200
+    check = json.loads(db.rows(con, "SELECT params FROM jobs WHERE type='verify'")[0]["params"])
+    assert check["platform"] == "xhs" and check["publish_job"] == -todo[0]["id"] and check["content_id"] == cid
+    assert api("/api/state")[1]["manual_todo"] == [] and api("/api/manual/finish", {"id": 999})[0] == 400
+    # 设置里关掉以后，小红书恢复自动发布
+    config.save_settings({"xhs_manual": False})
+    out = api("/api/publish", dict(body, title="另一条", targets=[{"platform": "xhs", "account": "主号", "title": "另一条短标题"}]))[1]
+    assert len(out["jobs"]) == 1 and out["manual"] == [] and not manual.is_manual("douyin")

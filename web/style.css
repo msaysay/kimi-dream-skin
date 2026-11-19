@@ -200,3 +200,8 @@ details.card > summary { cursor: pointer; }
 .insight { display: flex; gap: 10px; align-items: center; padding: 6px 0; }
 .insight + .insight { border-top: 1px solid var(--line); }
 .insight > .grow { flex: 1; min-width: 0; }
+.manual { border-top: 1px solid var(--line); padding: 12px 0; }
+.manual:first-of-type { border-top: 0; }
+.manual-row { display: flex; gap: 12px; align-items: flex-start; padding: 5px 0; font-size: 13px; }
+.manual-row > .sub { width: 40px; flex: none; } .manual-row > .grow { flex: 1; min-width: 0; word-break: break-all; }
+.ok-text { color: var(--good); } 

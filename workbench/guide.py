@@ -113,7 +113,12 @@ def next_steps(con):
             f"稿子已经好了，现在在「{first['stage']}」。" + (f"有 {len(overdue)} 条已经到排期日。" if overdue else "按阶段检查项一步步做。"),
             {"label": "打开这条", "content": first["id"]}, len(producing), urgent=bool(overdue))
 
-    to_publish = [c for c in items if not c["archived"] and c["stage"] == "发布" and not c["posts"]]
+    by_hand = rows(con, "SELECT platform, title FROM manual_posts WHERE status='todo' ORDER BY id")
+    if by_hand:
+        add("manual", f"{config.PLATFORMS[by_hand[0]['platform']]['name']}有 {len(by_hand)} 条等你手动发布", "素材、封面和文案都备好了。你自己发出去，发完回来点「我已发布」。",
+            {"label": "去发布页", "page": "publish"}, len(by_hand), urgent=True)
+    to_publish = [c for c in items if not c["archived"] and c["stage"] == "发布" and not c["posts"]
+                  and not rows(con, "SELECT 1 FROM manual_posts WHERE content_id=? AND status='todo'", c["id"])]
     if to_publish:
         add("publish", f"发布 {len(to_publish)} 条", "发布时关联这条选题，采集到数据后会自动验收。",
             {"label": "去发布", "content": to_publish[0]["id"], "publish": True}, len(to_publish))

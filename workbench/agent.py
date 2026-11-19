@@ -16,7 +16,7 @@ import time
 from . import config, contents, method
 from .db import rows
 
-KINDS = {"script": "出稿", "review": "AI 复盘", "bench": "拆解对标爆款", "titles": "把选题方向写成标题", "hot": "挑适合做的热点"}
+KINDS = {"script": "出稿", "review": "AI 复盘", "bench": "拆解对标爆款", "titles": "把选题方向写成标题", "hot": "挑适合做的热点", "predict": "预测数据"}
 TAG_LABELS = {name: field for field, (name, _) in method.TAG_FIELDS.items()}
 
 
@@ -54,6 +54,9 @@ def label(con, t):
         pf, pid = t["ref"].split("|", 1)
         b = rows(con, "SELECT title FROM bench_posts WHERE platform=? AND post_id=?", pf, pid)
         return f"拆解对标爆款：{(b[0]['title'] if b else pid)[:30]}"
+    if t["kind"] == "predict":
+        c = rows(con, "SELECT title FROM contents WHERE id=?", int(t["ref"]))
+        return f"预测数据：{c[0]['title'] if c else '（内容已删除）'}"
     if t["kind"] == "hot":
         return f"从 {len(p.get('ids') or [])} 个热点里挑适合做的"
     return f"把 {len(t['ref'].split(','))} 条选题方向写成具体标题"
@@ -85,6 +88,9 @@ def brief(con, task_id, direct=False):
     elif t["kind"] == "hot":
         from . import hot
         text = hot.judge_brief(con, p.get("ids") or [])
+    elif t["kind"] == "predict":
+        from . import predict
+        text = predict.brief(con, int(t["ref"]))
     else:
         items = [contents.get(con, int(i)) for i in t["ref"].split(",")]
         brief_items = [{"编号": c["id"], "方向": c["title"], "母题": c["motif"], "原型": c["archetype"], "开头钩": c["hook_open"],
@@ -178,6 +184,13 @@ def submit(con, task_id, text):
             update["stage"] = stages[min(stages.index(target) + 1, len(stages) - 1)]
         contents.save(con, update)
         note = f"稿子已写进「{update.get('title') or c['title']}」" + (f"，进入「{update['stage']}」阶段" if update.get("stage") else "")
+        from . import predict
+        try:  # 稿子定了就顺手排一条预测：发布前先猜，数据回来对答案
+            if predict.ensure_baseline(con, c["id"]):
+                create(con, "predict", c["id"])
+                note += "；已排一条数据预测"
+        except Exception:
+            pass
     elif t["kind"] == "review":
         from . import review
         from . import playbook
@@ -198,6 +211,9 @@ def submit(con, task_id, text):
     elif t["kind"] == "hot":
         from . import hot
         note = hot.judge_submit(con, p.get("ids") or [], text)
+    elif t["kind"] == "predict":
+        from . import predict
+        note = predict.submit(con, int(t["ref"]), text)
     else:
         ids = {int(i) for i in t["ref"].split(",")}
         done = 0

@@ -347,6 +347,7 @@ function contentDrawer(c) {
         <select data-t="slot" data-ti="${i}" style="width:90px">${["D1", "D3", "D7"].map((s) => `<option ${s === (t.slot || "D3") ? "selected" : ""}>${s}</option>`).join("")}</select></div>`).join("")}
       <label class="field"><span>验收口径（什么情况下算成立、什么情况下算失败）</span><textarea data-c="acceptance" style="min-height:60px">${esc(c.acceptance || "")}</textarea></label>
       ${r.results.length ? `<p><span class="tag v-${ACCEPT_CLASS[r.overall] || ""}">${esc(r.overall)}</span> ${r.results.map((x) => `${pfName(x.platform)} ${metricName(x.metric)} ${fmtMetric(x.metric, x.value)} / 目标 ${fmtMetric(x.metric, x.target)}（${x.slot}）`).join("；")}</p>` : ""}</div>
+    ${predictCard(c)}
     <div class="card"><h2>发出去的作品</h2>
       ${posts.length ? posts.map((p) => `<div class="row" style="margin-bottom:6px">${pfDot(p.platform)}${pfName(p.platform)} <span class="grow">${esc(cleanTitle(p.title || p.post_id))}</span><button class="small" data-act="content-unlink" data-platform="${p.platform}" data-post="${esc(p.post_id)}">取消关联</button></div>`).join("")
         : `<p class="sub">发布并采集后会按标题自动关联；也可以手动选。</p>`}
@@ -370,7 +371,48 @@ function readContentForm() {
 }
 function openContent(c) {
   S.editing = c;
+  if (!c) return;
+  if (S.pred && S.pred.id !== c.id) S.pred = null;
   const d = $("#drawer"); d.innerHTML = contentDrawer(c); d.hidden = false;
+  loadPred(c);
+}
+function loadPred(c) {  // 预测卡片单独加载，不挡住抽屉
+  if (!c || !c.id) return;
+  api("/api/predict/" + c.id).then((v) => {
+    S.pred = { id: c.id, ...v };
+    const el = document.getElementById("pred-card"); if (el && S.editing && S.editing.id === c.id) el.outerHTML = predictCard(S.editing);
+  }).catch(() => {});
+}
+const GUESS_NAME = { higher: "高于平时", same: "差不多", lower: "低于平时" };
+function predictCard(c) {
+  const P = S.pred && S.pred.id === c.id ? S.pred : null;
+  const wrap = (inner) => `<div class="card" id="pred-card"><h2>数据预测 <span class="sub" style="font-weight:400">发布前先猜，数据回来对答案。猜错的地方就是对「文案怎么变成结果」理解不够的地方</span></h2>${inner}</div>`;
+  if (!c.id) return "";
+  if (!P) return wrap(`<p class="sub" style="margin:0">加载中…</p>`);
+  const task = pendingFor("predict", c.id);
+  const base = (P.baseline || {}).data || {}, ai = (P.ai || {}).data || null, sc = P.score, act = P.actual || {};
+  const pfs = Object.keys(base);
+  if (!pfs.length) return wrap(`<p class="hint" style="margin:0">${P.can_predict ? "保存后点「预测数据」。" : "还没有可参照的历史数据。先采集或导入几条自己的作品，才有基线可比。"}</p>
+    ${P.can_predict && !P.published ? `<div class="row" style="margin-top:8px"><button data-act="predict">预测数据</button></div>` : ""}`);
+  const hit = (pf, m, src) => { const it = sc && (sc.sources[src] || []).find((x) => x.platform === pf && x.metric === m); return it ? (it.in_range ? ` <span class="ok-text">✓</span>` : ` <span class="warn-text">✗</span>`) : ""; };
+  const range = (r, m) => r ? `${fmtMetric(m, r[0])} ~ ${fmtMetric(m, r[2])}` : "—";
+  const tables = pfs.map((pf) => `<div class="sub" style="margin:10px 0 4px">${pfDot(pf)}<b>${pfName(pf)}</b> · 基线参照${esc(base[pf].group)}${ai && ai.verdicts && ai.verdicts[pf] ? ` · AI 预测判定「${esc(ai.verdicts[pf])}」${act[pf] && act[pf].verdict ? `，实际「${esc(act[pf].verdict)}」` : ""}` : ""}</div>
+    <div class="table-wrap"><table><thead><tr><th>指标</th><th>基线（按平时猜）</th><th>AI 读稿子的区间</th><th>AI 预测</th><th>实际（${P.slot}）</th></tr></thead><tbody>
+    ${P.metrics.filter((m) => base[pf][m]).map((m) => { const a = ai && ai.platforms[pf] && ai.platforms[pf][m]; const real = act[pf] ? act[pf][m] : null;
+      return `<tr><td>${metricName(m)}</td><td class="num-cell">${range(base[pf][m], m)}${hit(pf, m, "baseline")}</td><td class="num-cell">${range(a, m)}${hit(pf, m, "ai")}</td>
+        <td class="num-cell">${a ? `<b>${fmtMetric(m, a[1])}</b>` : "—"}</td><td class="num-cell">${real == null ? `<span class="hint">${P.published ? "等数据" : "未发布"}</span>` : `<b>${fmtMetric(m, real)}</b>`}</td></tr>`; }).join("")}</tbody></table></div>`).join("");
+  const held = (a) => { const s = sc && sc.assumptions.find((x) => x.quote === a.quote && x.metric === a.metric); return s ? (s.held ? `<span class="tag v-good">成立</span>` : `<span class="tag v-bad">被推翻</span>`) : `<span class="tag">待验证</span>`; };
+  const assumptions = ai && ai.assumptions.length ? `<div class="sub" style="margin:12px 0 4px">AI 的假设（数据回来逐条对答案）</div>${ai.assumptions.map((a) => `<div class="insight">${held(a)}
+      <div class="grow"><b>${metricName(a.metric)}会${esc(a.direction)}</b>：「${esc(a.quote)}」${a.why ? `<div class="hint">${esc(a.why)}</div>` : ""}</div></div>`).join("")}
+      ${ai.risk ? `<p class="hint">最大的风险：${esc(ai.risk)}</p>` : ""}` : "";
+  const me = (P.me || {}).data || {};
+  const guess = `<div class="row" style="margin-top:12px;flex-wrap:wrap"><span class="sub">你的直觉（可选）：</span>${[["views", "播放"], ["follow_rate", "关注率"]].map(([m, n]) => `<label class="hint">${n}
+      <select data-guess="${m}" ${P.published ? "disabled" : ""} style="width:110px"><option value="">不猜</option>${Object.entries(GUESS_NAME).map(([k, v]) => `<option value="${k}" ${me[m] === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>`).join("")}
+      ${sc && sc.guess.length ? `<span class="hint">对了 ${sc.guess.filter((g) => g.hit).length} / ${sc.guess.length}</span>` : ""}</div>`;
+  const late = sc && sc.late.length ? `<p class="hint warn-text">有预测是发布之后才做的，不计入准确度。</p>` : "";
+  const actions = P.published ? "" : task ? agentHint(task) : `<div class="row" style="margin-top:10px"><button class="${ai ? "" : "primary"}" data-act="predict" ${c.script ? "" : "disabled"}>${ai ? "按现在的稿子重新预测" : "让 AI 读稿子预测"}</button>
+      <span class="hint">${c.script ? (ai ? "稿子改过就重新预测一次；发布之后预测就锁定了。" : "出稿后会自动预测；也可以手动点。") : "先有稿子才能预测。"}</span></div>`;
+  return wrap(tables + assumptions + guess + late + actions);
 }
 
 // ---------- 评论 ----------
@@ -602,7 +644,7 @@ function publishPage() {
       ${pfDot(a.platform)}<b>${pfName(a.platform)}</b>「${esc(a.account)}」
       ${blocked ? `<span class="hint">${blocked}</span>` : ""}
       ${def.draft && !isNote ? `<span class="grow"></span><label class="hint"><input type="checkbox" data-draft="${esc(key)}" ${f.drafts[key] ? "checked" : ""}>只存草稿，不直接发</label>` : ""}
-      ${a.platform === "xhs" ? `<span class="grow"></span><span class="hint">小红书对自动发布较敏感，建议保持显示浏览器窗口</span>` : ""}
+      ${a.platform === "xhs" ? `<span class="grow"></span><span class="hint">${S.state.settings.xhs_manual ? "不自动提交：工作台备好素材和文案，你自己发（避免被判违规）" : "小红书对自动发布较敏感，建议保持显示浏览器窗口"}</span>` : ""}
       ${a.platform === "xhs" ? `<input data-ptitle="${esc(key)}" value="${esc(f.ptitles[key] || "")}" maxlength="20" placeholder="小红书单独的标题（最多 20 字，留空用左边的标题）" style="flex-basis:100%;margin-top:6px">` : ""}</label>`;
   }).join("") : `<div class="sub">还没有账号，请先到「账号」页添加并登录。</div>`;
   return `<div class="head"><h1>发布</h1></div>
@@ -627,7 +669,21 @@ function publishPage() {
     <p class="hint">发布前会自动检查标题字数、有没有微信号和外链、有没有泄露密钥。发完 2 分钟后会到作品列表里确认是不是真的发出去了。
       发布时会依次打开各平台的发布页自动填写并提交，同一时间只跑一个。进度在下方和「任务」页查看。</p>
   </div></div>
+  ${manualCards()}
   <div class="card"><h2>最近的发布</h2><div id="live-publish"></div></div>`;
+}
+function manualCards() {
+  const list = S.state.manual_todo || [];
+  if (!list.length) return "";
+  const copy = (label, text) => `<button class="small" data-act="copy-text" data-text="${esc(text)}">${label}</button>`;
+  return `<div class="card" style="border-color:var(--accent)"><h2>等你手动发布 ${list.length} 条 <span class="sub" style="font-weight:400">素材和文案都备好了，在手机或你平时用的浏览器里发，发完回来点「我已发布」</span></h2>
+    ${list.map((m) => `<div class="manual"><div class="row"><b>${pfDot(m.platform)}${pfName(m.platform)}「${esc(m.account)}」</b>${m.schedule ? `<span class="tag">计划 ${esc(m.schedule.replace("T", " "))} 发</span>` : ""}<span class="grow"></span>
+        <button class="small primary" data-act="manual-done" data-id="${m.id}">我已发布</button><button class="small" data-act="manual-skip" data-id="${m.id}">不发了</button></div>
+      <div class="manual-row"><span class="sub">标题</span><span class="grow">${esc(m.title)} <span class="hint">${m.title.length} 字</span></span>${copy("复制标题", m.title)}</div>
+      <div class="manual-row"><span class="sub">正文</span><span class="grow" style="white-space:pre-wrap">${esc(m.body)}${m.tags_text ? "\n" + esc(m.tags_text) : ""}</span>${copy("复制正文和话题", m.body + (m.tags_text ? "\n" + m.tags_text : ""))}</div>
+      <div class="manual-row"><span class="sub">${m.kind === "note" ? "图片" : "视频"}</span><span class="grow hint">${m.files.map(esc).join("<br>")}</span><button class="small" data-act="manual-open" data-id="${m.id}" data-which="video">打开所在文件夹</button></div>
+      ${m.cover ? `<div class="manual-row"><span class="sub">封面</span><span class="grow hint">${esc(m.cover)}（已按${pfName(m.platform)}规格裁好）</span><button class="small" data-act="manual-open" data-id="${m.id}" data-which="cover">打开所在文件夹</button></div>` : ""}
+      ${m.reminders.length ? `<div class="hint" style="margin-top:6px">发的时候留意：${m.reminders.map((r) => `<div>· ${esc(r)}</div>`).join("")}</div>` : ""}</div>`).join("")}</div>`;
 }
 function issuesHtml(list) {
   if (!list) return "";
@@ -807,6 +863,7 @@ function settingsPage() {
     <label class="field"><input type="checkbox" id="st-hot-auto" ${s.hot_auto ? "checked" : ""}>工作台开着时每天刷新一次热榜</label>
     <label class="field"><input type="checkbox" id="st-verify" ${s.verify_publish ? "checked" : ""}>发布后到作品列表里确认是不是真的发出去了</label>
     <label class="field"><span>一个平台超过几天没发就提醒</span><input type="number" id="st-cadence" min="1" max="30" value="${s.cadence_days}"></label>
+    <label class="field"><input type="checkbox" id="st-xhs-manual" ${s.xhs_manual ? "checked" : ""}>小红书不自动提交，由我自己发（推荐：自动提交容易被平台判违规）</label>
     <label class="field"><span>小红书封面比例</span><select id="st-xhs-ratio">${["3:4", "1:1", "4:3", "9:16"].map((r) => `<option ${r === s.xhs_cover_ratio ? "selected" : ""}>${r}</option>`).join("")}</select></label>
     <label class="field"><span>使用本机的 Chrome（可选，填 chrome.exe 的完整路径；留空用自带浏览器）</span><input id="st-chrome" value="${esc(s.chrome_path)}"></label>
   </div><div class="card"><h2>AI</h2>
@@ -888,6 +945,7 @@ async function poll() {
       S.contents = (await api("/api/contents")).contents;
       const fresh = S.contents.find((c) => c.id === S.editing.id);
       if (fresh && fresh.script !== S.editing.script) { openContent(fresh); toast("稿子已更新"); }
+      else loadPred(S.editing);
     }
     live();
   } catch (e) { /* 服务暂时没响应，下次再试 */ }
@@ -952,8 +1010,10 @@ const ACTIONS = {
     const names = targets.map((t) => `${pfName(t.platform)}「${t.account}」${t.draft ? "（存草稿）" : ""}`).join("、");
     const warnText = warns.length ? `\n\n有 ${warns.length} 条提醒（不改也能发）：\n${warns.map((w) => "· " + (w.platform ? pfName(w.platform) + "：" : "") + w.msg).join("\n")}` : "";
     if (!confirm(`确认${f.schedule ? "定时 " + f.schedule.replace("T", " ") + " " : "立即"}发布到：${names}？${warnText}`)) return;
-    await api("/api/publish", body);
-    S.checkIssues = null; toast("已加入发布队列，发完会自动确认是否发出"); await refresh(); render();
+    const res = await api("/api/publish", body);
+    S.checkIssues = null;
+    toast(res.manual && res.manual.length ? (res.jobs.length ? "其余平台已加入发布队列；" : "") + "小红书的素材和文案备好了，见下方「等你手动发布」" : "已加入发布队列，发完会自动确认是否发出");
+    await refresh(); render();
   },
   "cover-preview": async () => { await coverPreview(); },
   "cover-focus": async (el, e) => {
@@ -1062,6 +1122,14 @@ const ACTIONS = {
   },
   "content-scaffold": async () => { const c = readContentForm(); const { id } = await api("/api/contents/save", c); await api("/api/contents/scaffold", { id });
     S.contents = (await api("/api/contents")).contents; openContent(S.contents.find((x) => x.id === id)); },
+  predict: async () => {
+    const c = readContentForm(); const { id } = await api("/api/contents/save", c); await api("/api/predict/request", { id });
+    toast(handedTo()); await refresh(); S.contents = (await api("/api/contents")).contents; openContent(S.contents.find((x) => x.id === id));
+  },
+  "manual-done": async (el) => { await api("/api/manual/finish", { id: +el.dataset.id, status: "done" }); toast("好的，稍后会到作品列表里确认并关联选题"); await refresh(); render(); },
+  "manual-skip": async (el) => { if (!confirm("这条不发了？")) return; await api("/api/manual/finish", { id: +el.dataset.id, status: "skipped" }); await refresh(); render(); },
+  "manual-open": async (el) => { const r = await api("/api/manual/open", { id: +el.dataset.id, which: el.dataset.which }); toast("已打开：" + r.folder); },
+  "copy-text": async (el) => { try { await navigator.clipboard.writeText(el.dataset.text); toast("已复制"); } catch { toast("复制失败，请手动选中复制"); } },
   "content-ai": async () => {
     const c = readContentForm(); const { id } = await api("/api/contents/save", c); await api("/api/contents/ai", { id });
     await refresh(); S.contents = (await api("/api/contents")).contents; openContent(S.contents.find((x) => x.id === id)); if (S.page !== "dashboard") render();
@@ -1166,7 +1234,7 @@ const ACTIONS = {
   },
   "save-settings": async (quiet) => {
     await api("/api/settings", { auto_collect: $("#st-auto").checked, collect_hour: +$("#st-hour").value, max_posts: +$("#st-max").value, headless: $("#st-headless").checked,
-      chrome_path: $("#st-chrome").value, hot_auto: $("#st-hot-auto").checked, verify_publish: $("#st-verify").checked, cadence_days: +$("#st-cadence").value, xhs_cover_ratio: $("#st-xhs-ratio").value, ai_runner: $("#st-runner").value, ai_runner_cmd: $("#st-runner-cmd").value, ai_base_url: $("#st-url").value, ai_model: $("#st-model").value, ai_api_key: $("#st-key").value,
+      chrome_path: $("#st-chrome").value, hot_auto: $("#st-hot-auto").checked, xhs_manual: $("#st-xhs-manual").checked, verify_publish: $("#st-verify").checked, cadence_days: +$("#st-cadence").value, xhs_cover_ratio: $("#st-xhs-ratio").value, ai_runner: $("#st-runner").value, ai_runner_cmd: $("#st-runner-cmd").value, ai_base_url: $("#st-url").value, ai_model: $("#st-model").value, ai_api_key: $("#st-key").value,
       tikhub_api_key: $("#st-th-key").value, tikhub_base_url: $("#st-th-url").value, bench_hit_ratio: +$("#st-th-ratio").value,
       bench_pages: +$("#st-th-pages").value, bench_auto: $("#st-th-auto").checked });
     if (quiet === true) { await refresh(); return; }
@@ -1191,6 +1259,10 @@ document.addEventListener("input", (e) => {
 });
 document.addEventListener("change", act(async (e) => {
   const t = e.target;
+  if (t.dataset.guess && S.editing && S.editing.id) {
+    const guess = {}; document.querySelectorAll("[data-guess]").forEach((x) => { if (x.value) guess[x.dataset.guess] = x.value; });
+    await api("/api/predict/guess", { id: S.editing.id, guess }); toast("记下了，数据回来对答案"); return;
+  }
   if (t.dataset.board) {
     const on = [...document.querySelectorAll("[data-board]")].filter((x) => x.checked).map((x) => x.dataset.board);
     await api("/api/hot/boards", { boards: on }); toast("来源已保存，点「刷新热榜」生效"); await go("hot"); return;
