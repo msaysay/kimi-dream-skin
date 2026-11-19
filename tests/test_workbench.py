@@ -1239,7 +1239,7 @@ def seed_history(con, n=5, archetype="教程型"):
 
 AI_PREDICTION = """预测｜视频号｜播放｜1800｜2600｜4000
 预测｜视频号｜完播率｜10%｜12.5%｜15%
-预测｜视频号｜关注率｜0.8%｜1.2%｜1.6%
+预测｜视频号｜关注率｜0.6%｜0.8%｜1.1%
 预测｜视频号｜分享率｜1.5%｜2.2%｜3%
 预测｜视频号｜评论率｜0.3%｜0.5%｜0.8%
 判定｜视频号｜双强型
@@ -1275,6 +1275,8 @@ def test_prediction_is_made_before_publish_and_scored_after(con):
         agent.submit(con, ptask["id"], AI_PREDICTION.split("假设")[0])
     with pytest.raises(ValueError, match="没读到"):
         agent.submit(con, ptask["id"], "我觉得会不错")
+    with pytest.raises(ValueError, match="预测值在基线中位数的另一边"):  # 说关注率会低于基线，给的预测值却比基线高
+        agent.submit(con, ptask["id"], AI_PREDICTION.replace("0.6%｜0.8%｜1.1%", "0.8%｜1.2%｜1.6%"))
     assert "5 个指标，2 条假设" in agent.submit(con, ptask["id"], AI_PREDICTION)
     assert predict.set_guess(con, cid, {"views": "higher", "follow_rate": "same", "乱写": "x"}) == {"views": "higher", "follow_rate": "same"}
     c = contents.with_acceptance(con, [contents.get(con, cid)])[0]
